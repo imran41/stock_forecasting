@@ -557,7 +557,7 @@ def main():
     st.markdown("**Professional Time Series Analysis with Multiple Forecasting Models**")
     
     # Sidebar
-    st.sidebar.image("/Users/mdimraniqbal/Downloads/fored-trading-mutual-funds-stock-market-background/sl_022321_41020_26.jpg", width=100)
+    st.sidebar.image("sl_022321_41020_26.jpg", width=100)
     st.sidebar.title("⚙️ Configuration")
     
     # Popular tickers
