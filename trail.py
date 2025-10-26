@@ -1184,6 +1184,75 @@ def create_excel_download(data, forecast_df, rmse_scores):
         st.error(f"Error creating Excel file: {str(e)}")
         return None
 
+########
+
+class OverfittingDetector:
+    @staticmethod
+    def check_overfitting(train_rmse, test_rmse, complexity_penalty=1.1):
+        ratio = test_rmse / train_rmse if train_rmse > 0 else float('inf')
+        if ratio > 2.0:
+            return "HIGH", f"Severe overfitting (test/train ratio: {ratio:.2f})"
+        elif ratio > 1.5:
+            return "MEDIUM", f"Possible overfitting (test/train ratio: {ratio:.2f})"
+        else:
+            return "LOW", "Good generalization"
+
+class LiquidityAnalyzer:
+    def __init__(self):
+        self.min_daily_volume = 100000
+        self.min_dollar_volume = 1000000
+    
+    def check_liquidity(self, data, recommended_shares):
+        avg_volume = data['Volume'].tail(30).mean()
+        position_to_volume = recommended_shares / avg_volume if avg_volume > 0 else float('inf')
+        
+        return {
+            'sufficient_volume': avg_volume > self.min_daily_volume,
+            'position_size_reasonable': position_to_volume < 0.01,
+            'avg_daily_volume': avg_volume,
+            'position_volume_ratio': position_to_volume
+        }
+
+class CircuitBreaker:
+    def __init__(self):
+        self.consecutive_losses_limit = 3
+    
+    def should_halt_trading(self, performance, market_conditions):
+        if performance.get('consecutive_losing_trades', 0) >= self.consecutive_losses_limit:
+            return True, f"Too many consecutive losses: {performance['consecutive_losing_trades']}"
+        if market_conditions.get('volatility_ratio', 1) > 4:
+            return True, f"Extreme volatility: {market_conditions['volatility_ratio']:.1f}x"
+        return False, "OK"
+
+def enhanced_data_validation(data, ticker):
+    """Comprehensive data quality checks"""
+    checks = {
+        'has_data': len(data) > 0,
+        'no_nan_prices': not data['Price'].isna().any(),
+        'sufficient_variation': data['Price'].std() > 0,
+        'no_zeros': (data['Price'] > 0).all(),
+    }
+    
+    if not all(checks.values()):
+        failed = [k for k, v in checks.items() if not v]
+        raise ValueError(f"Data quality issues: {failed}")
+
+def detect_anomalies_and_black_swans(data):
+    """Detect unusual market conditions"""
+    returns = data['Price'].pct_change().dropna()
+    current_volatility = returns.rolling(20).std().iloc[-1]
+    historical_volatility = returns.std()
+    volatility_ratio = current_volatility / historical_volatility if historical_volatility > 0 else 1
+    
+    alerts = []
+    if volatility_ratio > 3:
+        alerts.append(f"🚨 EXTREME VOLATILITY: {volatility_ratio:.1f}x normal")
+    
+    return {
+        'alerts': alerts,
+        'volatility_ratio': volatility_ratio,
+        'current_environment': "NORMAL" if volatility_ratio < 2 else "STRESSED"
+    }
 
 # ==================== MAIN APP ====================
 def main():
@@ -1372,6 +1441,81 @@ def main():
         - This is NOT financial advice
         """)
 
+    # ==================== SAFETY CHECK CLASSES ====================
+    
+    class OverfittingDetector:
+        @staticmethod
+        def check_overfitting(train_rmse, test_rmse, complexity_penalty=1.1):
+            ratio = test_rmse / train_rmse if train_rmse > 0 else float('inf')
+            if ratio > 2.0:
+                return "HIGH", f"Severe overfitting (test/train ratio: {ratio:.2f})"
+            elif ratio > 1.5:
+                return "MEDIUM", f"Possible overfitting (test/train ratio: {ratio:.2f})"
+            else:
+                return "LOW", "Good generalization"
+
+    class LiquidityAnalyzer:
+        def __init__(self):
+            self.min_daily_volume = 100000
+            self.min_dollar_volume = 1000000
+        
+        def check_liquidity(self, data, recommended_shares):
+            avg_volume = data['Volume'].tail(30).mean()
+            position_to_volume = recommended_shares / avg_volume if avg_volume > 0 else float('inf')
+            
+            return {
+                'sufficient_volume': avg_volume > self.min_daily_volume,
+                'position_size_reasonable': position_to_volume < 0.01,
+                'avg_daily_volume': avg_volume,
+                'position_volume_ratio': position_to_volume
+            }
+
+    class CircuitBreaker:
+        def __init__(self):
+            self.consecutive_losses_limit = 3
+        
+        def should_halt_trading(self, performance, market_conditions):
+            if performance.get('consecutive_losing_trades', 0) >= self.consecutive_losses_limit:
+                return True, f"Too many consecutive losses: {performance['consecutive_losing_trades']}"
+            if market_conditions.get('volatility_ratio', 1) > 4:
+                return True, f"Extreme volatility: {market_conditions['volatility_ratio']:.1f}x"
+            return False, "OK"
+
+    def enhanced_data_validation(data, ticker):
+        """Comprehensive data quality checks"""
+        checks = {
+            'has_data': len(data) > 0,
+            'no_nan_prices': not data['Price'].isna().any(),
+            'sufficient_variation': data['Price'].std() > 0,
+            'no_zeros': (data['Price'] > 0).all(),
+        }
+        
+        if not all(checks.values()):
+            failed = [k for k, v in checks.items() if not v]
+            raise ValueError(f"Data quality issues: {failed}")
+
+    def detect_anomalies_and_black_swans(data):
+        """Detect unusual market conditions"""
+        returns = data['Price'].pct_change().dropna()
+        if len(returns) < 20:
+            return {'alerts': [], 'volatility_ratio': 1, 'current_environment': "INSUFFICIENT_DATA"}
+            
+        current_volatility = returns.rolling(20).std().iloc[-1]
+        historical_volatility = returns.std()
+        volatility_ratio = current_volatility / historical_volatility if historical_volatility > 0 else 1
+        
+        alerts = []
+        if volatility_ratio > 3:
+            alerts.append(f"🚨 EXTREME VOLATILITY: {volatility_ratio:.1f}x normal")
+        
+        return {
+            'alerts': alerts,
+            'volatility_ratio': volatility_ratio,
+            'current_environment': "NORMAL" if volatility_ratio < 2 else "STRESSED"
+        }
+
+    # ==================== MAIN ANALYSIS EXECUTION ====================
+    
     if st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True):
         
         if not is_valid:
@@ -1388,6 +1532,8 @@ def main():
         else:
             risk_mgr = None
         
+        # ==================== DATA LOADING & VALIDATION ====================
+        
         with st.spinner(f"📡 Fetching data for {ticker}..."):
             raw_data = load_stock_data(ticker, start_date, end_date)
         
@@ -1398,11 +1544,33 @@ def main():
         with st.spinner("⚙️ Preparing data..."):
             data = prepare_data(raw_data)
         
+        # ==================== SAFETY CHECKS ====================
+        
+        st.markdown("---")
+        st.header("🔍 Data Quality & Safety Checks")
+        
+        # 1. Data quality validation
+        try:
+            enhanced_data_validation(data, ticker)
+            st.success("✅ Data quality validation passed")
+        except ValueError as e:
+            st.error(f"❌ Data quality issue: {e}")
+            return
+
+        # 2. Black swan detection
+        anomaly_check = detect_anomalies_and_black_swans(data)
+        if anomaly_check['alerts']:
+            for alert in anomaly_check['alerts']:
+                st.warning(alert)
+        else:
+            st.success("✅ No extreme market conditions detected")
+        
         st.success(f"✅ Successfully loaded {len(data)} days of data")
         
         currency = get_currency_symbol(ticker)
         
         # ==================== MARKET REGIME DETECTION ====================
+        
         if enable_regime_detection:
             st.markdown("---")
             st.header("🌐 Market Regime Analysis")
@@ -1450,6 +1618,7 @@ def main():
                 col3.metric("Preferred Direction", strategy_params['preferred_direction'])
         
         # ==================== MODEL TRAINING ====================
+        
         st.markdown("---")
         st.header("🤖 Model Training & Evaluation")
         
@@ -1466,6 +1635,26 @@ def main():
         
         st.success(f"🏆 Best Model: **{best_model_name}** (RMSE: {rmse_scores[best_model_name]:.2f})")
         
+        # 3. Overfitting detection
+        if len(rmse_scores) >= 2:
+            train_scores = [v for k, v in rmse_scores.items() if 'train' in k.lower() or k == best_model_name]
+            test_scores = [v for k, v in rmse_scores.items() if 'test' in k.lower() or k != best_model_name]
+            
+            if train_scores and test_scores:
+                train_rmse = min(train_scores)
+                test_rmse = min(test_scores)
+                
+                overfitting_status, overfitting_msg = OverfittingDetector.check_overfitting(
+                    train_rmse, test_rmse
+                )
+                
+                if "HIGH" in overfitting_status:
+                    st.error(f"🚨 {overfitting_msg} - DO NOT TRADE")
+                elif "MEDIUM" in overfitting_status:
+                    st.warning(f"⚠️ {overfitting_msg} - Trade with caution")
+                else:
+                    st.success(f"✅ {overfitting_msg}")
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -1480,6 +1669,7 @@ def main():
             st.dataframe(rmse_df, use_container_width=True, hide_index=True)
         
         # ==================== WALK-FORWARD VALIDATION ====================
+        
         if enable_walk_forward:
             st.markdown("---")
             st.header("🔄 Walk-Forward Validation")
@@ -1633,6 +1823,7 @@ def main():
                     st.dataframe(trades_df, use_container_width=True, hide_index=True)
         
         # ==================== FORECASTING ====================
+        
         st.markdown("---")
         st.header("🔮 Price Forecast")
         
@@ -1715,6 +1906,7 @@ def main():
                     st.plotly_chart(components_fig, use_container_width=True)
         
         # ==================== TRADING SIGNAL GENERATION ====================
+        
         st.markdown("---")
         st.header("🎯 Trading Signal Analysis")
         
@@ -1781,9 +1973,11 @@ def main():
                     f"{signal_info['expected_return']:.2f}%"
                 )
             
+            # ==================== TRADING SAFETY CHECKS ====================
+            
             if use_risk_mgmt and signal_info['signal'] in ["STRONG BUY", "WEAK BUY"]:
                 st.markdown("---")
-                st.subheader("💼 Position Sizing Recommendation")
+                st.subheader("💼 Position Sizing & Safety Checks")
                 
                 can_trade, reason, risk_score = risk_mgr.can_trade(
                     signal_info['confidence'],
@@ -1798,6 +1992,35 @@ def main():
                         risk_score
                     )
                     
+                    # 4. Liquidity check
+                    if shares > 0:
+                        liquidity_analyzer = LiquidityAnalyzer()
+                        liquidity_status = liquidity_analyzer.check_liquidity(data, shares)
+                        
+                        if not liquidity_status['position_size_reasonable']:
+                            st.error(f"❌ Position too large: {liquidity_status['position_volume_ratio']:.2%} of daily volume")
+                            can_trade = False
+                            reason = "Position size exceeds liquidity constraints"
+                        elif not liquidity_status['sufficient_volume']:
+                            st.warning(f"⚠️ Low liquidity stock: avg volume {liquidity_status['avg_daily_volume']:,.0f} shares")
+                        else:
+                            st.success(f"✅ Position size OK: {liquidity_status['position_volume_ratio']:.2%} of daily volume")
+                    
+                    # 5. Circuit breaker
+                    if can_trade:
+                        circuit_breaker = CircuitBreaker()
+                        should_halt, halt_reason = circuit_breaker.should_halt_trading(
+                            performance if 'performance' in locals() else {},
+                            anomaly_check
+                        )
+                        if should_halt:
+                            st.error(f"🚨 TRADING HALTED: {halt_reason}")
+                            signal_info['signal'] = "NO SIGNAL - SAFETY HALT"
+                            can_trade = False
+                            reason = halt_reason
+                
+                # Display trade recommendation
+                if can_trade:
                     stop_loss = risk_mgr.calculate_stop_loss(current_price)
                     take_profit, tp_pct = risk_mgr.calculate_take_profit(
                         current_price,
@@ -1848,6 +2071,7 @@ def main():
                 st.dataframe(pred_df, use_container_width=True, hide_index=True)
         
         # ==================== DIAGNOSTICS ====================
+        
         if show_diagnostics:
             st.markdown("---")
             st.header("🔍 Model Diagnostics")
@@ -1868,6 +2092,7 @@ def main():
                 st.plotly_chart(acf_pacf_fig, use_container_width=True)
         
         # ==================== HISTORICAL DATA TAB ====================
+        
         st.markdown("---")
         st.header("📊 Data Overview")
         
@@ -1890,6 +2115,7 @@ def main():
             )
         
         # ==================== EXPORT ====================
+        
         st.markdown("---")
         st.header("💾 Export Data & Reports")
         
@@ -2038,6 +2264,7 @@ USE AT YOUR OWN RISK.
         )
 
     # ==================== EDUCATIONAL SECTION ====================
+    
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📚 Learn More")
 
@@ -2097,10 +2324,11 @@ USE AT YOUR OWN RISK.
     st.sidebar.markdown("---")
     st.sidebar.caption("Built with ❤️ using Streamlit | Data: Yahoo Finance")
     st.sidebar.caption("⚠️ For Educational Purposes Only")
-    st.sidebar.caption("Version 2.1 - FIXED Walk-Forward Backtest")
-
+    st.sidebar.caption("Version 2.1 - Enhanced Safety Features")
 
 if __name__ == "__main__":
     main()
+
+
 
     
