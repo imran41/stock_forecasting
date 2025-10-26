@@ -55,14 +55,14 @@ class RiskManager:
         if self.daily_loss >= self.max_daily_loss_pct * self.initial_capital:
             return False, f"Daily loss limit reached (₹{self.daily_loss:.2f})", 0.0
         
-        if signal_confidence < 0.60:  # FIXED: Lowered from 0.70
+        if signal_confidence < 0.60:
             return False, f"Low confidence ({signal_confidence*100:.1f}% < 60%)", 0.0
         
         if self.capital < current_price:
             return False, "Insufficient capital", 0.0
         
         expected_return = (prediction_price / current_price) - 1
-        if abs(expected_return) < 0.01:  # FIXED: Lowered from 0.02
+        if abs(expected_return) < 0.01:
             return False, f"Expected return too low ({expected_return*100:.1f}%)", 0.0
         
         if expected_return > 0.50:
@@ -203,10 +203,19 @@ class RiskManager:
         
         closed_trades = [t for t in self.trade_history if t['status'] == 'CLOSED']
         winning_trades = [t for t in closed_trades if t['pnl'] > 0]
-        losing_trades = [t for t in closed_trades if t['pnl'] <= 0]
+        losing_trades = [t for t in closed_trades if t['pnl'] < 0]  # Fixed: only trades with negative pnl
         
         total_profit = sum([t['pnl'] for t in winning_trades])
         total_loss = abs(sum([t['pnl'] for t in losing_trades]))
+        
+        # FIXED: Proper profit factor calculation
+        if total_loss == 0:
+            if total_profit > 0:
+                profit_factor = float('inf')  # Perfect - no losses, only profits
+            else:
+                profit_factor = 0.0  # No profitable trades
+        else:
+            profit_factor = total_profit / total_loss
         
         return {
             'total_trades': len(closed_trades),
@@ -215,7 +224,7 @@ class RiskManager:
             'win_rate': len(winning_trades) / len(closed_trades) * 100 if closed_trades else 0,
             'avg_profit': total_profit / len(winning_trades) if winning_trades else 0,
             'avg_loss': total_loss / len(losing_trades) if losing_trades else 0,
-            'profit_factor': total_profit / total_loss if total_loss > 0 else 0,
+            'profit_factor': profit_factor,
             'total_pnl': sum([t['pnl'] for t in closed_trades]),
             'total_return_pct': ((self.capital / self.initial_capital) - 1) * 100,
             'current_capital': self.capital,
@@ -419,6 +428,17 @@ def validate_forecast_horizon(data_length, forecast_days):
         return True, "⚠️ Forecast horizon is quite long. Consider shorter horizons for better accuracy."
     
     return True, None
+
+def display_profit_factor(profit_factor):
+    """Properly display profit factor in Streamlit"""
+    if profit_factor == float('inf'):
+        return "∞ (Perfect)"
+    elif profit_factor > 1000:
+        return "1000+ (Excellent)"
+    elif profit_factor == 0:
+        return "0.00 (No Trades)"
+    else:
+        return f"{profit_factor:.2f}x"
 
 
 # ==================== DATA FETCHING ====================
@@ -724,12 +744,8 @@ def forecast_with_prophet(data, forecast_days=365):
         st.error(f"Prophet forecasting failed: {str(e)}")
         return None, None, None
     
-# ==================== WALK-FORWARD BACKTESTING (FIXED) ====================
-
+# ==================== WALK-FORWARD BACKTESTING ====================
 def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=100000):
-    """
-    FIXED VERSION with proper model handling and position management
-    """
     risk_mgr = RiskManager(initial_capital)
     confidence_calc = ConfidenceCalculator()
 
@@ -755,7 +771,6 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
             break
         
         try:
-            # FIXED: Train model based on model_type
             if model_type == 'linear':
                 model = smf.ols("Price ~ t", data=data).fit()
             elif model_type == 'exp':
@@ -773,13 +788,11 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
             else:
                 model = smf.ols('Price ~ t + t_square + Sin + Cos', data=data).fit()
             
-            # FIXED: Use get_model_prediction for correct handling
             prediction = get_model_prediction(model, model_type, test_data.iloc[[0]])
             pred_price = float(prediction.iloc[0])
             
             current_price = test_data['Price'].iloc[0]
             
-            # Calculate residuals correctly
             train_predictions = get_model_prediction(model, model_type, data)
             residuals = data['Price'].values - train_predictions.values
             residuals_series = pd.Series(residuals)
@@ -788,9 +801,7 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
                 residuals_series, pred_price, current_price
             )
             
-            # FIXED: Check existing position first
             if "TEST" in risk_mgr.open_positions:
-                # Check exit conditions throughout the test period
                 for j in range(len(test_data)):
                     current_test_price = test_data['Price'].iloc[j]
                     should_exit, exit_reason = risk_mgr.check_exit_conditions("TEST", current_test_price)
@@ -807,14 +818,12 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
                         })
                         break
             
-            # FIXED: Only try to open new position if no position exists
             if "TEST" not in risk_mgr.open_positions:
                 can_trade, reason, risk_score = risk_mgr.can_trade(
                     stat_confidence, current_price, pred_price
                 )
                 
-                # FIXED: More lenient signal condition
-                if can_trade and pred_price > current_price * 1.01:  # Only 1% gain needed
+                if can_trade and pred_price > current_price * 1.01:
                     signal = "BUY"
                     
                     shares, position_value, position_pct = risk_mgr.calculate_position_size(
@@ -840,7 +849,6 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
             else:
                 signal = "HOLD"
             
-            # FIXED: Close position at end if still open
             if "TEST" in risk_mgr.open_positions and (i + step >= len(data)):
                 exit_price = test_data['Price'].iloc[-1]
                 trade = risk_mgr.close_position("TEST", exit_price)
@@ -854,14 +862,12 @@ def walk_forward_backtest(data, model_type, window=180, step=7, initial_capital=
                     'reason': 'End of backtest'
                 })
             
-            # Record results
             results['dates'].append(test_data['Date'].iloc[-1])
             results['prices'].append(test_data['Price'].iloc[-1])
             results['predictions'].append(pred_price)
             results['signals'].append(signal)
             results['positions'].append(1 if "TEST" in risk_mgr.open_positions else 0)
             
-            # Calculate portfolio value
             position_value = sum([p['shares'] * test_data['Price'].iloc[-1] 
                                  for p in risk_mgr.open_positions.values()])
             results['portfolio_values'].append(risk_mgr.capital + position_value)
@@ -1103,7 +1109,6 @@ def plot_forecast_comparison(data, forecast_df, ticker, prophet_forecast=None):
 
     return fig
 
-
 def plot_residuals_analysis(residuals, data):
     fig = make_subplots(
         rows=2, cols=2,
@@ -1184,8 +1189,7 @@ def create_excel_download(data, forecast_df, rmse_scores):
         st.error(f"Error creating Excel file: {str(e)}")
         return None
 
-########
-
+# ==================== SAFETY CHECK CLASSES ====================
 class OverfittingDetector:
     @staticmethod
     def check_overfitting(train_rmse, test_rmse, complexity_penalty=1.1):
@@ -1240,6 +1244,9 @@ def enhanced_data_validation(data, ticker):
 def detect_anomalies_and_black_swans(data):
     """Detect unusual market conditions"""
     returns = data['Price'].pct_change().dropna()
+    if len(returns) < 20:
+        return {'alerts': [], 'volatility_ratio': 1, 'current_environment': "INSUFFICIENT_DATA"}
+        
     current_volatility = returns.rolling(20).std().iloc[-1]
     historical_volatility = returns.std()
     volatility_ratio = current_volatility / historical_volatility if historical_volatility > 0 else 1
@@ -1441,81 +1448,6 @@ def main():
         - This is NOT financial advice
         """)
 
-    # ==================== SAFETY CHECK CLASSES ====================
-    
-    class OverfittingDetector:
-        @staticmethod
-        def check_overfitting(train_rmse, test_rmse, complexity_penalty=1.1):
-            ratio = test_rmse / train_rmse if train_rmse > 0 else float('inf')
-            if ratio > 2.0:
-                return "HIGH", f"Severe overfitting (test/train ratio: {ratio:.2f})"
-            elif ratio > 1.5:
-                return "MEDIUM", f"Possible overfitting (test/train ratio: {ratio:.2f})"
-            else:
-                return "LOW", "Good generalization"
-
-    class LiquidityAnalyzer:
-        def __init__(self):
-            self.min_daily_volume = 100000
-            self.min_dollar_volume = 1000000
-        
-        def check_liquidity(self, data, recommended_shares):
-            avg_volume = data['Volume'].tail(30).mean()
-            position_to_volume = recommended_shares / avg_volume if avg_volume > 0 else float('inf')
-            
-            return {
-                'sufficient_volume': avg_volume > self.min_daily_volume,
-                'position_size_reasonable': position_to_volume < 0.01,
-                'avg_daily_volume': avg_volume,
-                'position_volume_ratio': position_to_volume
-            }
-
-    class CircuitBreaker:
-        def __init__(self):
-            self.consecutive_losses_limit = 3
-        
-        def should_halt_trading(self, performance, market_conditions):
-            if performance.get('consecutive_losing_trades', 0) >= self.consecutive_losses_limit:
-                return True, f"Too many consecutive losses: {performance['consecutive_losing_trades']}"
-            if market_conditions.get('volatility_ratio', 1) > 4:
-                return True, f"Extreme volatility: {market_conditions['volatility_ratio']:.1f}x"
-            return False, "OK"
-
-    def enhanced_data_validation(data, ticker):
-        """Comprehensive data quality checks"""
-        checks = {
-            'has_data': len(data) > 0,
-            'no_nan_prices': not data['Price'].isna().any(),
-            'sufficient_variation': data['Price'].std() > 0,
-            'no_zeros': (data['Price'] > 0).all(),
-        }
-        
-        if not all(checks.values()):
-            failed = [k for k, v in checks.items() if not v]
-            raise ValueError(f"Data quality issues: {failed}")
-
-    def detect_anomalies_and_black_swans(data):
-        """Detect unusual market conditions"""
-        returns = data['Price'].pct_change().dropna()
-        if len(returns) < 20:
-            return {'alerts': [], 'volatility_ratio': 1, 'current_environment': "INSUFFICIENT_DATA"}
-            
-        current_volatility = returns.rolling(20).std().iloc[-1]
-        historical_volatility = returns.std()
-        volatility_ratio = current_volatility / historical_volatility if historical_volatility > 0 else 1
-        
-        alerts = []
-        if volatility_ratio > 3:
-            alerts.append(f"🚨 EXTREME VOLATILITY: {volatility_ratio:.1f}x normal")
-        
-        return {
-            'alerts': alerts,
-            'volatility_ratio': volatility_ratio,
-            'current_environment': "NORMAL" if volatility_ratio < 2 else "STRESSED"
-        }
-
-    # ==================== MAIN ANALYSIS EXECUTION ====================
-    
     if st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True):
         
         if not is_valid:
@@ -1721,10 +1653,14 @@ def main():
                 delta=f"{winning_trades}W / {losing_trades}L"
             )
             
+            # FIXED: Proper profit factor display
+            profit_factor_display = display_profit_factor(performance['profit_factor'])
+            profit_factor_delta = "Perfect" if performance['profit_factor'] == float('inf') else ("Good" if performance['profit_factor'] > 1.5 else "Poor")
+            
             col4.metric(
                 "Profit Factor",
-                f"{performance['profit_factor']:.2f}x",
-                delta="Good" if performance['profit_factor'] > 1.5 else "Poor"
+                profit_factor_display,
+                delta=profit_factor_delta
             )
             
             col5.metric(
@@ -1736,9 +1672,12 @@ def main():
             st.markdown("---")
             st.subheader("📊 Model Readiness Assessment")
             
+            # FIXED: Proper profit factor check
+            profit_factor_check = (performance['profit_factor'] == float('inf') or performance['profit_factor'] > 1.5)
+            
             checks = {
                 "Win Rate > 55%": performance['win_rate'] > 55,
-                "Profit Factor > 1.5": performance['profit_factor'] > 1.5,
+                "Profit Factor > 1.5": profit_factor_check,
                 "Total Return > 10%": performance['total_return_pct'] > 10,
                 "At Least 10 Trades": performance['total_trades'] >= 10
             }
@@ -1777,7 +1716,7 @@ def main():
                 - Consider market regime
                 """)
             
-            if performance['profit_factor'] < 1.5:
+            if not profit_factor_check:
                 st.warning("""
                 ⚠️ **WARNING: Low Profit Factor**
                 
@@ -2158,6 +2097,9 @@ def main():
         st.markdown("---")
         st.subheader("📄 Analysis Report")
         
+        # FIXED: Proper profit factor display in report
+        profit_factor_report = display_profit_factor(performance['profit_factor']) if 'performance' in locals() else "N/A"
+        
         report = f"""
 Stock Analysis Report - {ticker}
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -2172,7 +2114,7 @@ Data Summary
 ============
 Analysis Period: {start_date} to {end_date}
 Total Days: {len(data)}
-Current Price: ₹{current_price:.2f}
+Current Price: ₹{data['Price'].iloc[-1]:.2f}
 52-Week High: ₹{data['High'].max():.2f}
 52-Week Low: ₹{data['Low'].min():.2f}
 
@@ -2188,7 +2130,7 @@ Backtesting Results (Walk-Forward)
 ===================================
 Total Return: {performance['total_return_pct']:.2f}%
 Win Rate: {performance['win_rate']:.1f}%
-Profit Factor: {performance['profit_factor']:.2f}x
+Profit Factor: {profit_factor_report}
 Total Trades: {performance['total_trades']}
 Readiness Score: {readiness_score:.0f}%
 """
@@ -2291,7 +2233,7 @@ USE AT YOUR OWN RISK.
         
         **Win Rate:** >55% is good
         
-        **Profit Factor:** >1.5 needed
+        **Profit Factor:** >1.5 needed (∞ = Perfect)
         
         **Confidence:** >70% to trade
         
@@ -2324,11 +2266,7 @@ USE AT YOUR OWN RISK.
     st.sidebar.markdown("---")
     st.sidebar.caption("Built with ❤️ using Streamlit | Data: Yahoo Finance")
     st.sidebar.caption("⚠️ For Educational Purposes Only")
-    st.sidebar.caption("Version 2.1 - Enhanced Safety Features")
+    st.sidebar.caption("Version 2.2 - Fixed Profit Factor Calculation")
 
 if __name__ == "__main__":
     main()
-
-
-
-    
