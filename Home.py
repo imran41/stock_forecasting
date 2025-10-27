@@ -16,19 +16,19 @@ with col1:
     st.markdown("### 📊 Advanced Stock Forecasting")
     st.markdown("Advanced AI-powered stock prediction and analysis")
     if st.button("Launch Advanced Platform", use_container_width=True, type="primary"):
-        st.switch_page("pages/app.py")
+        st.switch_page("app.py")
 
 with col2:
     st.markdown("### 💼 Professional Stock Forecasting")
     st.markdown("Professional-grade forecasting tools and insights")
     if st.button("Launch Professional Platform", use_container_width=True, type="primary"):
-        st.switch_page("pages/trail.py")
+        st.switch_page("trail.py")
 
 with col3:
     st.markdown("### 📈 Real-Time Recommendations")
     st.markdown("Live stock recommendations and market signals")
     if st.button("Launch Real-Time System", use_container_width=True, type="primary"):
-        st.switch_page("pages/Real-Time-stock.py")
+        st.switch_page("Real-Time-stock.py")
 
 # Add footer
 st.markdown("<br><br>", unsafe_allow_html=True)
