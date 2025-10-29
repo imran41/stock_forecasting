@@ -12,6 +12,9 @@ class RealTimeStockAnalyzer:
         # Pre-defined Indian stocks
         self.default_stocks = {
             "RELIANCE.NS": "Reliance Industries",
+            "IDEA.NS": "Idea Vodafone",
+            "TATAGOLD.NS": "TATA Gold",
+            "ADANIGREEN.NS": "Adani Green",
             "TCS.NS": "Tata Consultancy Services", 
             "INFY.NS": "Infosys",
             "HDFCBANK.NS": "HDFC Bank",
