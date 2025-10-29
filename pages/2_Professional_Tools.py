@@ -1358,6 +1358,8 @@ def main():
 
     popular_tickers = {
         "Reliance Industries": "RELIANCE.NS",
+        "Idea Vodafone": "IDEA.NS",
+        "TATA Gold": "TATAGOLD.NS",
         "TCS": "TCS.NS",
         "HDFC Bank": "HDFCBANK.NS",
         "Infosys": "INFY.NS",
