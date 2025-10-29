@@ -829,7 +829,7 @@ def main():
     
     with tab1:
         st.markdown("### 📊 Real-Time Stock Scanner")
-        st.info(f"📡 **Live Analysis** - Scanning top 20 Indian stocks from Yahoo Finance")
+        st.info(f"📡 **Live Analysis** - Scanning top Indian stocks from Yahoo Finance")
         
         col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
