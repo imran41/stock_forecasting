@@ -11,7 +11,7 @@ st.markdown("Your one-stop platform for AI-driven market insights and trading to
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Create three columns for feature sections
-col1, col2, col3, col4 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown("### 🤖 AI-Powered Forecasts")
