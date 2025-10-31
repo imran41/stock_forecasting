@@ -8,3 +8,12 @@ statsmodels
 prophet
 scipy
 openpyxl
+streamlit
+yfinance
+pandas
+numpy
+scikit-learn
+statsmodels
+ta
+tensorflow
+plotly
