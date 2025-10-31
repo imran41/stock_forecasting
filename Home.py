@@ -11,7 +11,7 @@ st.markdown("Your one-stop platform for AI-driven market insights and trading to
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Create three columns for feature sections
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(3)
 
 with col1:
     st.markdown("### 🤖 AI-Powered Forecasts")
@@ -30,6 +30,12 @@ with col3:
     st.markdown("Stay ahead with real-time buy/sell alerts and market momentum updates.")
     if st.button("Open Live Signals", use_container_width=True, type="primary"):
         st.switch_page("pages/3_Live_Signals.py")
+        
+with col4:
+    st.markdown("### ⚡ Advanced 24-Hour Stock Forecast")
+    st.markdown("Stay ahead with real-time 24hrs forecasting.")
+    if st.button("Open Advanced 24-Hour Stock Forecast", use_container_width=True, type="primary"):
+        st.switch_page("pages/24_Hour_Stock_Forecast.py")
 
 # Footer
 st.markdown("<br><br>", unsafe_allow_html=True)
