@@ -1385,7 +1385,7 @@ def main():
         ticker = popular_tickers[selected_ticker]
 
     col1, col2 = st.sidebar.columns(2)
-    start_date = col1.date_input("Start Date", pd.to_datetime("2023-01-01"))
+    start_date = col1.date_input("Start Date", pd.to_datetime("2022-01-01"))
     end_date = col2.date_input("End Date", pd.to_datetime("today"))
 
     is_valid, message = validate_dates(start_date, end_date)
