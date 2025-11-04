@@ -11,7 +11,7 @@ st.markdown("Your one-stop platform for AI-driven market insights and trading to
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Create three columns for feature sections
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     st.markdown("### 🤖 AI-Powered Forecasts")
@@ -36,6 +36,12 @@ with col4:
     st.markdown("Stay ahead with real-time 24hrs forecasting.")
     if st.button("Open Advanced 24-Hour Stock Forecast", use_container_width=True, type="primary"):
         st.switch_page("pages/24_Hour_Stock_Forecast.py")
+        
+with col5:
+    st.markdown("### 📊 52-Week Stock Analyzer")
+    st.markdown("Professional NSE Market Analysis 52 week low/high in today's date")
+    if st.button("Open 52-Week Stock Analyzer", use_container_width=True, type="primary"):
+        st.switch_page("pages/52_Week_Stock_Analyzer.py")
 
 # Footer
 st.markdown("<br><br>", unsafe_allow_html=True)
