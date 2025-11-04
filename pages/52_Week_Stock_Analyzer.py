@@ -268,7 +268,7 @@ def generate_ai_summary(stock_type: str, strength: str, return_1y: float, pe: Op
             summary_parts.append("⚠️ Caution - Analyze fundamentals deeply before entry")
         
         if dividend_yield and dividend_yield > 0.02:
-            summary_parts.append(f"💰 Dividend yield: {dividend_yield*100:.2f}%")
+            summary_parts.append(f"💰 Dividend yield: {dividend_yield}%")
             
     elif stock_type == "52W HIGH":
         if return_1y > 100:
