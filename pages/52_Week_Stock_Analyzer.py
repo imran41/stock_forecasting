@@ -328,7 +328,7 @@ def analyze_single_stock(symbol: str) -> Optional[Dict]:
         "Sector": info["sector"],
         "1Y_Return_%": round(ret_1y, 2),
         "Beta": round(info["beta"], 2) if info["beta"] else "N/A",
-        "Div_Yield_%": round(info["dividend_yield"]*100, 2) if info["dividend_yield"] else "N/A",
+        "Div_Yield_%": round(info["dividend_yield"], 2) if info["dividend_yield"] else "N/A",
         "Avg_Volume": f"{avg_volume/1e6:.2f}M",
         "Strength": strength,
         "Remarks": remark,
