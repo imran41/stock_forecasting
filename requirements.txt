@@ -17,3 +17,4 @@ statsmodels
 ta
 tensorflow
 plotly
+seaborn
