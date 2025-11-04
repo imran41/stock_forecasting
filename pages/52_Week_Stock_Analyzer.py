@@ -259,26 +259,26 @@ def generate_ai_summary(stock_type: str, strength: str, return_1y: float, pe: Op
     
     if stock_type == "52W LOW":
         if strength == "Strong" and return_1y < -10:
-            summary_parts.append("🎯 **Strong Buy Signal** - Quality stock at discount")
+            summary_parts.append("🎯 Strong Buy Signal - Quality stock at discount")
         elif strength == "Strong":
-            summary_parts.append("✅ **Accumulation Zone** - Good entry point for long-term")
+            summary_parts.append("✅ Accumulation Zone - Good entry point for long-term")
         elif strength == "Moderate" and return_1y < -20:
-            summary_parts.append("⏳ **Wait & Watch** - Needs trend reversal confirmation")
+            summary_parts.append("⏳ Wait & Watch - Needs trend reversal confirmation")
         else:
-            summary_parts.append("⚠️ **Caution** - Analyze fundamentals deeply before entry")
+            summary_parts.append("⚠️ Caution - Analyze fundamentals deeply before entry")
         
         if dividend_yield and dividend_yield > 0.02:
             summary_parts.append(f"💰 Dividend yield: {dividend_yield*100:.2f}%")
             
     elif stock_type == "52W HIGH":
         if return_1y > 100:
-            summary_parts.append("🔴 **Highly Overextended** - Very high profit booking risk")
+            summary_parts.append("🔴 Highly Overextended - Very high profit booking risk")
         elif return_1y > 50:
-            summary_parts.append("⚠️ **Overbought Territory** - Use strict stop loss")
+            summary_parts.append("⚠️ Overbought Territory - Use strict stop loss")
         elif strength == "Strong":
-            summary_parts.append("✅ **Strong Momentum** - Can hold with trailing SL")
+            summary_parts.append("✅ Strong Momentum - Can hold with trailing SL")
         else:
-            summary_parts.append("⏳ **Momentum Play** - Short-term only, be cautious")
+            summary_parts.append("⏳ Momentum Play - Short-term only, be cautious")
     
     if beta and beta > 1.5:
         summary_parts.append("⚡ High volatility stock")
@@ -378,10 +378,10 @@ def analyze_stocks_parallel(symbols: List[str], max_workers: int = 10) -> Tuple[
                 progress = stats["completed"] / stats["total"]
                 progress_bar.progress(progress)
                 status_text.markdown(f"""
-                    📊 **Progress**: {stats['completed']}/{stats['total']} 
-                    | ✅ **Found**: {stats['found']} 
-                    | ⏭️ **Not Extreme**: {stats['not_extreme']} 
-                    | ❌ **Failed**: {stats['failed']}
+                    📊 Progress: {stats['completed']}/{stats['total']} 
+                    | ✅ Found: {stats['found']} 
+                    | ⏭️ Not Extreme: {stats['not_extreme']} 
+                    | ❌ Failed: {stats['failed']}
                 """)
     
     progress_bar.empty()
@@ -713,7 +713,7 @@ def render_results_table(df: pd.DataFrame) -> pd.DataFrame:
     ]
     
     if len(filtered_df) < len(df):
-        st.info(f"📊 Showing **{len(filtered_df)}** of **{len(df)}** stocks after filtering")
+        st.info(f"📊 Showing {len(filtered_df)} of {len(df)} stocks after filtering")
     
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -802,8 +802,8 @@ def render_stock_detail(filtered_df: pd.DataFrame):
         with col4:
             st.metric("Strength", row['Strength'])
         
-        st.info(f"**🤖 AI Analysis:** {row['AI_Summary']}")
-        st.warning(f"**📝 Remarks:** {row['Remarks']}")
+        st.info(f"🤖 AI Analysis: {row['AI_Summary']}")
+        st.warning(f"📝 Remarks: {row['Remarks']}")
         
         create_interactive_chart(
             selected,
@@ -819,21 +819,21 @@ def render_stock_detail(filtered_df: pd.DataFrame):
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown("**Price Statistics:**")
-                st.write(f"- **Highest**: ₹{hist['Close'].max():.2f}")
-                st.write(f"- **Lowest**: ₹{hist['Close'].min():.2f}")
-                st.write(f"- **Average**: ₹{hist['Close'].mean():.2f}")
-                st.write(f"- **Volatility (Std)**: ₹{hist['Close'].std():.2f}")
+                st.markdown("Price Statistics:")
+                st.write(f"- Highest: ₹{hist['Close'].max():.2f}")
+                st.write(f"- Lowest: ₹{hist['Close'].min():.2f}")
+                st.write(f"- Average: ₹{hist['Close'].mean():.2f}")
+                st.write(f"- Volatility (Std): ₹{hist['Close'].std():.2f}")
             
             with col2:
-                st.markdown("**Volume Statistics:**")
-                st.write(f"- **Avg Volume**: {hist['Volume'].mean()/1e6:.2f}M")
-                st.write(f"- **Max Volume**: {hist['Volume'].max()/1e6:.2f}M")
-                st.write(f"- **Min Volume**: {hist['Volume'].min()/1e6:.2f}M")
+                st.markdown("Volume Statistics:")
+                st.write(f"- Avg Volume: {hist['Volume'].mean()/1e6:.2f}M")
+                st.write(f"- Max Volume: {hist['Volume'].max()/1e6:.2f}M")
+                st.write(f"- Min Volume: {hist['Volume'].min()/1e6:.2f}M")
                 
                 recent_return = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-30]) / 
                                hist['Close'].iloc[-30] * 100)
-                st.write(f"- **30D Return**: {recent_return:.2f}%")
+                st.write(f"- 30D Return: {recent_return:.2f}%")
 
 def render_export_options(filtered_df: pd.DataFrame):
     """Render professional export options."""
@@ -1031,22 +1031,22 @@ def render_help_section():
     st.markdown("""
     #### 🎯 How to Use This Tool
     
-    1. **Select Stock Universe**: Choose from NIFTY 50, 100, 200, or All NSE stocks in the sidebar
-    2. **Adjust Settings**: Configure parallel threads and distance threshold
-    3. **Start Analysis**: Click the 'Start Analysis' button and wait for results
-    4. **Filter Results**: Use advanced filters to narrow down stocks
-    5. **Analyze Stocks**: Click on any stock to view detailed charts and insights
-    6. **Export Data**: Download results as CSV, Excel, or text report
+    1. Select Stock Universe: Choose from NIFTY 50, 100, 200, or All NSE stocks in the sidebar
+    2. Adjust Settings: Configure parallel threads and distance threshold
+    3. Start Analysis: Click the 'Start Analysis' button and wait for results
+    4. Filter Results: Use advanced filters to narrow down stocks
+    5. Analyze Stocks: Click on any stock to view detailed charts and insights
+    6. Export Data: Download results as CSV, Excel, or text report
     
     #### 📊 Understanding the Metrics
     
-    - **52W LOW**: Stock is trading within 5% of its 52-week low
-    - **52W HIGH**: Stock is trading within 5% of its 52-week high
-    - **Strength**: Based on P/E ratio, market cap, and beta
-    - **1Y Return**: Percentage return over the past year
-    - **Distance %**: How far the stock is from the 52W reference value
-    - **Beta**: Measure of stock volatility (>1 = more volatile)
-    - **P/E Ratio**: Price-to-Earnings ratio
+    - 52W LOW: Stock is trading within 5% of its 52-week low
+    - 52W HIGH: Stock is trading within 5% of its 52-week high
+    - Strength: Based on P/E ratio, market cap, and beta
+    - 1Y Return: Percentage return over the past year
+    - Distance %: How far the stock is from the 52W reference value
+    - Beta: Measure of stock volatility (>1 = more volatile)
+    - P/E Ratio: Price-to-Earnings ratio
     
     #### 🤖 AI Summary Interpretation
     
@@ -1058,11 +1058,11 @@ def render_help_section():
     
     #### ⚙️ Advanced Features
     
-    - **Multi-filter System**: Combine type, strength, sector, and return filters
-    - **Stock Comparison**: Compare up to 4 stocks side-by-side
-    - **Watchlist Manager**: Save and track your favorite stocks
-    - **Interactive Charts**: 3-year price trend, candlestick, and volume charts
-    - **Export Options**: Multiple format support for further analysis
+    - Multi-filter System: Combine type, strength, sector, and return filters
+    - Stock Comparison: Compare up to 4 stocks side-by-side
+    - Watchlist Manager: Save and track your favorite stocks
+    - Interactive Charts: 3-year price trend, candlestick, and volume charts
+    - Export Options: Multiple format support for further analysis
     
     #### ⚠️ Important Notes
     
@@ -1087,7 +1087,7 @@ def render_help_section():
     
     with col1:
         st.info("""
-        **For Value Investors:**
+        For Value Investors:
         - Focus on 52W LOW + Strong stocks
         - Look for low P/E ratios (<15)
         - Check dividend yield
@@ -1096,7 +1096,7 @@ def render_help_section():
     
     with col2:
         st.info("""
-        **For Momentum Traders:**
+        For Momentum Traders:
         - Focus on 52W HIGH + Strong stocks
         - Look for high 1Y returns
         - Check beta for volatility
@@ -1128,7 +1128,7 @@ def main():
         col1, col2 = st.columns([4, 1])
         
         with col1:
-            st.info(f"📈 Ready to analyze **{len(symbols)}** stocks from {option}")
+            st.info(f"📈 Ready to analyze {len(symbols)} stocks from {option}")
         
         with col2:
             if st.session_state.analysis_results is not None:
@@ -1175,7 +1175,7 @@ def main():
             
             if not results:
                 st.warning(
-                    "⚠️ **No stocks found near 52-week extremes.**\n\n"
+                    "⚠️ No stocks found near 52-week extremes.\n\n"
                     "Try adjusting the threshold in sidebar or selecting a different stock list."
                 )
             else:
