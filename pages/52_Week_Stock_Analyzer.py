@@ -1050,11 +1050,11 @@ def render_help_section():
     
     #### 🤖 AI Summary Interpretation
     
-    - **🎯 Strong Buy Signal**: High-quality stock at attractive valuation
-    - **✅ Accumulation Zone**: Good for long-term investors
-    - **⏳ Wait & Watch**: Needs confirmation before entry
-    - **⚠️ Caution**: Risky, analyze fundamentals deeply
-    - **🔴 Highly Overextended**: High profit-booking risk
+    - 🎯 Strong Buy Signal: High-quality stock at attractive valuation
+    - ✅ Accumulation Zone: Good for long-term investors
+    - ⏳ Wait & Watch: Needs confirmation before entry
+    - ⚠️ Caution: Risky, analyze fundamentals deeply
+    - 🔴 Highly Overextended: High profit-booking risk
     
     #### ⚙️ Advanced Features
     
