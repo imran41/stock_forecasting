@@ -63,15 +63,18 @@ def fetch_stock_data(ticker):
 
 def extract_stock_fundamentals(info):
     """Extract fundamental data from stock info"""
+    div_yield = info.get("dividendYield")
+    debt_to_equity = info.get("debtToEquity")
+    
     fundamentals = {
         'current_price': info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose"),
         'week_52_low': info.get("fiftyTwoWeekLow"),
         'week_52_high': info.get("fiftyTwoWeekHigh"),
         'PE': info.get("trailingPE"),
         'PB': info.get("priceToBook"),
-        'div_yield': info.get("dividendYield")/100,
+        'div_yield': div_yield/100 if div_yield is not None else None,
         'ROE': info.get("returnOnEquity"),
-        'DE_ratio': info.get("debtToEquity")/100,
+        'DE_ratio': debt_to_equity/100 if debt_to_equity is not None else None,
         'market_cap': info.get("marketCap"),
         'EPS': info.get("trailingEps"),
         'company_name': info.get("longName") or info.get("shortName") or "N/A",
