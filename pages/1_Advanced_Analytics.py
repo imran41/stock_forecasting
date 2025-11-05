@@ -1,1181 +1,607 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from sklearn.metrics import root_mean_squared_error
-import statsmodels.formula.api as smf
-from statsmodels.tsa.stattools import acf, pacf
-from statsmodels.tsa.ar_model import AutoReg
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from datetime import datetime, timedelta
-from scipy import stats
-import io
-import os
-import warnings
-warnings.filterwarnings("ignore")
 
-# Prophet import with error handling
-try:
-    from prophet import Prophet
-    PROPHET_AVAILABLE = True
-except ImportError:
-    PROPHET_AVAILABLE = False
+# Page configuration
+st.set_page_config(
+    page_title="NSE Stock Analyzer",
+    page_icon="📈",
+    layout="wide"
+)
 
 # ==================== UTILITY FUNCTIONS ====================
-def get_currency_symbol(ticker):
-    """Return appropriate currency symbol based on ticker"""
-    if ticker.endswith('.NS') or ticker.endswith('.BO'):  # Indian stocks
-        return '₹'
-    elif ticker.endswith('.L'):  # London
-        return '£'
-    elif ticker.endswith('.T'):  # Tokyo
-        return '¥'
-    else:  # Default to USD
-        return '$'
 
-def validate_dates(start_date, end_date):
-    """Validate date inputs"""
-    if start_date >= end_date:
-        return False, "Start date must be before end date"
-    
-    days_diff = (end_date - start_date).days
-    if days_diff < 30:
-        return False, "Please select at least 30 days of data"
-    
-    return True, "Valid"
+def format_currency(value):
+    """Format value as Indian currency"""
+    if value is None:
+        return "N/A"
+    return f"₹{value:.2f}"
 
-def validate_forecast_horizon(data_length, forecast_days):
-    """Validate if forecast horizon is reasonable"""
-    ratio = forecast_days / data_length
-    
-    if ratio > 1.0:
-        return False, "⚠️ Forecast horizon is longer than training data. Results may be unreliable."
-    elif ratio > 0.5:
-        return True, "⚠️ Forecast horizon is quite long. Consider shorter horizons for better accuracy."
-    
-    return True, None
+def format_percentage(value, is_already_percent=False):
+    """Format value as percentage"""
+    if value is None:
+        return "N/A"
+    if is_already_percent:
+        return f"{value:.2f}%"
+    return f"{value * 100:.2f}%"
 
-# ==================== DATA FETCHING ====================
-def load_stock_data(ticker, start_date, end_date):
-    """Fetch stock data from Yahoo Finance"""
-    try:
-        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
-        if data.empty:
-            return None
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        data.reset_index(inplace=True)
-        return data
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
-        return None
+def format_ratio(value):
+    """Format value as ratio"""
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}"
 
-# ==================== DATA PREPROCESSING ====================
-def prepare_data(data):
-    """Prepare data with time-based and seasonal features"""
-    df = data.copy()
-    df.rename(columns={"Close": "Price"}, inplace=True)
-    df = df[["Date", "Open", "High", "Low", "Price", "Volume"]]
-    df = df.sort_values(by='Date', ascending=True).reset_index(drop=True)
-    
-    # Time features
-    df["t"] = np.arange(1, len(df) + 1)
-    df["t_square"] = df["t"] ** 2
-    df["log_Price"] = np.log(df["Price"])
-    
-    # Seasonal features
-    df["Sin"] = np.sin((2 * np.pi * df["t"]) / 365.25)
-    df["Cos"] = np.cos((2 * np.pi * df["t"]) / 365.25)
-    
-    return df
+def format_market_cap(value):
+    """Format market cap in crores"""
+    if value is None:
+        return "N/A"
+    return f"₹{value / 1e7:.2f} Cr"
 
-def proper_time_series_split(data, test_size):
-    """Split time series data properly"""
-    split_idx = int(len(data) * (1 - test_size))
-    train_data = data.iloc[:split_idx].copy()
-    test_data = data.iloc[split_idx:].copy()
-    return train_data, test_data
+def calculate_distance_from_52w(current_price, week_52_low, week_52_high):
+    """Calculate percentage distance from 52-week low and high"""
+    pct_from_low = None
+    pct_from_high = None
+    
+    if current_price and week_52_low:
+        pct_from_low = ((current_price - week_52_low) / week_52_low * 100)
+    
+    if current_price and week_52_high:
+        pct_from_high = ((current_price - week_52_high) / week_52_high * 100)
+    
+    return pct_from_low, pct_from_high
 
-# ==================== MODEL TRAINING ====================
-def get_model_prediction(model, model_type, data):
-    """Get predictions based on model type"""
-    try:
-        if model_type in ['exp', 'mul_sea', 'mul_add_sea']:
-            # Exponential/Multiplicative models - return exp of log predictions
-            pred = model.predict(data)
-            return np.exp(pred)
-        else:
-            # Linear/Additive models
-            pred = model.predict(data)
-            return pred
-    except Exception as e:
-        st.error(f"Prediction error for {model_type}: {str(e)}")
-        return None
+def fetch_stock_data(ticker):
+    """Fetch stock data from yfinance"""
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    hist = stock.history(period="1y")
+    return stock, info, hist
 
-def train_all_models(train_data, test_data):
-    """Train all trend and seasonality models and return best model"""
-    models = {}
-    rmse_scores = {}
-    
-    # Linear Trend
-    try:
-        models['linear'] = smf.ols("Price ~ t", data=train_data).fit()
-        pred_linear = models['linear'].predict(test_data[["t"]])
-        rmse_scores['rmse_linear'] = root_mean_squared_error(test_data["Price"], pred_linear)
-    except Exception as e:
-        st.warning(f"Linear model failed: {str(e)}")
-    
-    # Exponential Trend
-    try:
-        models['exp'] = smf.ols("log_Price ~ t", data=train_data).fit()
-        pred_exp = models['exp'].predict(test_data[["t"]])
-        rmse_scores['rmse_Exp'] = root_mean_squared_error(test_data["Price"], np.exp(pred_exp))
-    except Exception as e:
-        st.warning(f"Exponential model failed: {str(e)}")
-    
-    # Quadratic Trend
-    try:
-        models['quad'] = smf.ols("Price ~ t + t_square", data=train_data).fit()
-        pred_quad = models['quad'].predict(test_data[["t", "t_square"]])
-        rmse_scores['rmse_Quad'] = root_mean_squared_error(test_data["Price"], pred_quad)
-    except Exception as e:
-        st.warning(f"Quadratic model failed: {str(e)}")
-    
-    # Additive Seasonality
-    try:
-        models['add_sea'] = smf.ols('Price ~ Sin + Cos', data=train_data).fit()
-        pred_add_sea = models['add_sea'].predict(test_data[["Sin", "Cos"]])
-        rmse_scores['rmse_add_sea'] = root_mean_squared_error(test_data['Price'], pred_add_sea)
-    except Exception as e:
-        st.warning(f"Additive seasonality model failed: {str(e)}")
-    
-    # Multiplicative Seasonality
-    try:
-        models['mul_sea'] = smf.ols('log_Price ~ Sin + Cos', data=train_data).fit()
-        pred_mul_sea = models['mul_sea'].predict(test_data[["Sin", "Cos"]])
-        rmse_scores['rmse_Mult_sea'] = root_mean_squared_error(test_data['Price'], np.exp(pred_mul_sea))
-    except Exception as e:
-        st.warning(f"Multiplicative seasonality model failed: {str(e)}")
-    
-    # Additive Seasonality + Quadratic Trend
-    try:
-        models['add_sea_quad'] = smf.ols('Price ~ t + t_square + Sin + Cos', data=train_data).fit()
-        pred_add_sea_quad = models['add_sea_quad'].predict(test_data[["t", "t_square", "Sin", "Cos"]])
-        rmse_scores['rmse_add_sea_quad'] = root_mean_squared_error(test_data['Price'], pred_add_sea_quad)
-    except Exception as e:
-        st.warning(f"Additive seasonality + quadratic model failed: {str(e)}")
-    
-    # Multiplicative Seasonality + Linear Trend
-    try:
-        models['mul_add_sea'] = smf.ols('log_Price ~ t + Sin + Cos', data=train_data).fit()
-        pred_mul_add_sea = models['mul_add_sea'].predict(test_data[["t", "Sin", "Cos"]])
-        rmse_scores['rmse_Mult_add_sea'] = root_mean_squared_error(test_data['Price'], np.exp(pred_mul_add_sea))
-    except Exception as e:
-        st.warning(f"Multiplicative seasonality + linear model failed: {str(e)}")
-    
-    if not rmse_scores:
-        st.error("All models failed to train!")
-        return None, None, None, None
-    
-    # Find best model
-    best_model_name = min(rmse_scores, key=rmse_scores.get)
-    model_mapping = {
-        'rmse_linear': 'linear',
-        'rmse_Exp': 'exp',
-        'rmse_Quad': 'quad',
-        'rmse_add_sea': 'add_sea',
-        'rmse_Mult_sea': 'mul_sea',
-        'rmse_add_sea_quad': 'add_sea_quad',
-        'rmse_Mult_add_sea': 'mul_add_sea'
+def extract_stock_fundamentals(info):
+    """Extract fundamental data from stock info"""
+    fundamentals = {
+        'current_price': info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose"),
+        'week_52_low': info.get("fiftyTwoWeekLow"),
+        'week_52_high': info.get("fiftyTwoWeekHigh"),
+        'PE': info.get("trailingPE"),
+        'PB': info.get("priceToBook"),
+        'div_yield': info.get("dividendYield")/100,
+        'ROE': info.get("returnOnEquity"),
+        'DE_ratio': info.get("debtToEquity")/100,
+        'market_cap': info.get("marketCap"),
+        'EPS': info.get("trailingEps"),
+        'company_name': info.get("longName") or info.get("shortName") or "N/A",
+        'sector': info.get("sector", "N/A"),
+        'industry': info.get("industry", "N/A"),
+        'industry_pe': info.get("industryPE")  # Try to fetch industry PE
     }
-    
-    best_model = models[model_mapping[best_model_name]]
-    best_model_type = model_mapping[best_model_name]
-    
-    return best_model, rmse_scores, best_model_name, models, best_model_type
+    return fundamentals
 
-# ==================== RESIDUAL ANALYSIS ====================
-def calculate_residuals(train_data, model, model_type):
-    """Calculate residuals from training data only"""
-    predictions = get_model_prediction(model, model_type, train_data)
-    if predictions is None:
+def calculate_moving_average(hist, window=50):
+    """Calculate moving average"""
+    if len(hist) >= window:
+        return hist['Close'].rolling(window=window).mean().iloc[-1]
+    return None
+
+def evaluate_criterion_near_52w_low(current_price, week_52_low):
+    """Evaluate if stock is near 52-week low"""
+    if current_price and week_52_low and current_price <= week_52_low * 1.10:
+        return 1.0, "✅ Trading within 10% of 52-week low (+1.0)"
+    return 0.0, "❌ Not near 52-week low (0)"
+
+def evaluate_criterion_pe_ratio(PE, industry_pe):
+    """Evaluate P/E ratio criterion"""
+    if PE and PE < industry_pe:
+        return 1.0, f"✅ P/E ({PE:.2f}) below industry P/E ({industry_pe:.2f}) (+1.0)"
+    elif PE:
+        return 0.0, f"❌ P/E ({PE:.2f}) above industry average (0)"
+    else:
+        return 0.0, "⚠️ P/E data not available (0)"
+
+def evaluate_criterion_pb_ratio(PB):
+    """Evaluate P/B ratio criterion"""
+    if PB and PB <= 3:
+        return 1.0, f"✅ P/B ratio ({PB:.2f}) ≤ 3 (+1.0)"
+    elif PB:
+        return 0.0, f"❌ P/B ratio ({PB:.2f}) > 3 (0)"
+    else:
+        return 0.0, "⚠️ P/B data not available (0)"
+
+def evaluate_criterion_dividend_yield(div_yield):
+    """Evaluate dividend yield criterion"""
+    if div_yield:
+        # Handle both formats: decimal (0.41) or percentage (41.0)
+        if div_yield > 1:  # It's already a percentage
+            normalized_yield = div_yield / 100
+            display_yield = div_yield
+        else:  # It's a decimal
+            normalized_yield = div_yield
+            display_yield = div_yield * 100
+        
+        if normalized_yield >= 0.02:  # 2% threshold
+            return 0.5, f"✅ Dividend yield ({display_yield:.2f}%) ≥ 2% (+0.5)"
+        else:
+            return 0.0, f"❌ Dividend yield ({display_yield:.2f}%) < 2% (0)"
+    else:
+        return 0.0, "⚠️ Dividend data not available (0)"
+
+def evaluate_criterion_roe(ROE):
+    """Evaluate ROE criterion"""
+    if ROE and ROE >= 0.10:
+        return 1.0, f"✅ ROE ({ROE * 100:.2f}%) ≥ 10% (+1.0)"
+    elif ROE:
+        return 0.0, f"❌ ROE ({ROE * 100:.2f}%) < 10% (0)"
+    else:
+        return 0.0, "⚠️ ROE data not available (0)"
+
+def evaluate_criterion_debt_equity(DE_ratio):
+    """Evaluate Debt/Equity criterion"""
+    if DE_ratio is not None:
+        # yfinance returns D/E as percentage (244 for 2.44), need to divide by 100
+        normalized_de = DE_ratio / 100 if DE_ratio > 10 else DE_ratio
+        
+        if normalized_de <= 0.5:
+            return 1.0, f"✅ Debt/Equity ({normalized_de:.2f}) ≤ 0.5 (+1.0)"
+        else:
+            return 0.0, f"❌ Debt/Equity ({normalized_de:.2f}) > 0.5 (0)"
+    else:
+        return 0.0, "⚠️ Debt/Equity data not available (0)"
+
+def evaluate_criterion_market_cap(market_cap):
+    """Evaluate market cap criterion"""
+    if market_cap and market_cap >= 20_000 * 1e7:
+        return 1.0, f"✅ Large-cap stock (Market Cap ≥ ₹20,000 Cr) (+1.0)"
+    elif market_cap:
+        return 0.0, f"❌ Not a large-cap stock (0)"
+    else:
+        return 0.0, "⚠️ Market cap data not available (0)"
+
+def evaluate_criterion_momentum(current_price, ma_50):
+    """Evaluate price momentum criterion"""
+    if ma_50 and current_price and current_price > ma_50:
+        return 0.5, f"✅ Price above 50-day MA (₹{ma_50:.2f}) (+0.5)"
+    elif ma_50:
+        return 0.0, f"❌ Price below 50-day MA (₹{ma_50:.2f}) (0)"
+    else:
+        return 0.0, "⚠️ Not enough data for 50-day MA (0)"
+
+def calculate_investment_score(fundamentals, industry_pe, hist):
+    """Calculate investment score based on all criteria"""
+    score = 0
+    criteria_results = []
+    
+    # Criterion 1: Near 52-week low
+    points, message = evaluate_criterion_near_52w_low(fundamentals['current_price'], fundamentals['week_52_low'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 2: P/E ratio
+    points, message = evaluate_criterion_pe_ratio(fundamentals['PE'], industry_pe)
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 3: P/B ratio
+    points, message = evaluate_criterion_pb_ratio(fundamentals['PB'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 4: Dividend yield
+    points, message = evaluate_criterion_dividend_yield(fundamentals['div_yield'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 5: ROE
+    points, message = evaluate_criterion_roe(fundamentals['ROE'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 6: Debt/Equity
+    points, message = evaluate_criterion_debt_equity(fundamentals['DE_ratio'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 7: Market cap
+    points, message = evaluate_criterion_market_cap(fundamentals['market_cap'])
+    score += points
+    criteria_results.append(message)
+    
+    # Criterion 8: Price momentum
+    ma_50 = calculate_moving_average(hist, 50)
+    points, message = evaluate_criterion_momentum(fundamentals['current_price'], ma_50)
+    score += points
+    criteria_results.append(message)
+    
+    return score, criteria_results
+
+def get_recommendation(score, max_score):
+    """Get investment recommendation based on score"""
+    score_percentage = (score / max_score) * 100
+    
+    if score >= 6:
+        return "BUY / ACCUMULATE", "Strong fundamentals with favorable entry point near 52-week low.", "success"
+    elif score >= 4:
+        return "WAIT / PARTIAL BUY", "Moderate fundamentals. Consider dollar-cost averaging or wait for better entry.", "warning"
+    else:
+        return "AVOID / SKIP", "Weak fundamentals or unfavorable risk-reward. Look for better opportunities.", "error"
+
+def display_header():
+    """Display application header"""
+    st.markdown("# 📈 NSE Stock Analyzer")
+    st.markdown("**Analyze NSE stocks trading near 52-week lows with fundamental insights**")
+    st.markdown("---")
+
+def display_company_info(ticker, fundamentals):
+    """Display company information"""
+    st.subheader(f"🏢 {fundamentals['company_name']}")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Sector", fundamentals['sector'])
+    with col2:
+        st.metric("Industry", fundamentals['industry'])
+    with col3:
+        st.metric("Ticker", ticker)
+
+def display_price_analysis(fundamentals, pct_from_low, pct_from_high):
+    """Display price analysis section"""
+    st.markdown("---")
+    st.subheader("💰 Price Analysis")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Current Price", format_currency(fundamentals['current_price']))
+    
+    with col2:
+        delta_str = f"{pct_from_low:.1f}%" if pct_from_low is not None else None
+        st.metric("52W Low", format_currency(fundamentals['week_52_low']), delta=delta_str)
+    
+    with col3:
+        delta_str = f"{pct_from_high:.1f}%" if pct_from_high is not None else None
+        st.metric("52W High", format_currency(fundamentals['week_52_high']), delta=delta_str)
+    
+    with col4:
+        st.metric("Market Cap", format_market_cap(fundamentals['market_cap']))
+
+def display_fundamentals(fundamentals, industry_pe):
+    """Display fundamental metrics"""
+    st.markdown("---")
+    st.subheader("📊 Fundamental Metrics")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("P/E Ratio", format_ratio(fundamentals['PE']))
+    with col2:
+        st.metric("P/B Ratio", format_ratio(fundamentals['PB']))
+    with col3:
+        st.metric("EPS", format_currency(fundamentals['EPS']))
+    with col4:
+        st.metric("ROE", format_percentage(fundamentals['ROE']))
+    with col5:
+        # Handle dividend yield - check if already percentage
+        div_val = fundamentals['div_yield']
+        if div_val is not None and div_val > 1:
+            st.metric("Div Yield", f"{div_val:.2f}%")
+        else:
+            st.metric("Div Yield", format_percentage(div_val))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # Normalize D/E ratio for display
+        de_display = fundamentals['DE_ratio']
+        if de_display is not None and de_display > 10:
+            de_display = de_display / 100
+        st.metric("Debt/Equity", format_ratio(de_display))
+    with col2:
+        # Show if industry PE was auto-fetched or manual
+        industry_pe_label = "Industry P/E"
+        if fundamentals.get('industry_pe'):
+            industry_pe_label = "Industry P/E (Auto)"
+        else:
+            industry_pe_label = "Industry P/E (Manual)"
+        st.metric(industry_pe_label, format_ratio(industry_pe))
+
+def display_scoring_analysis(criteria_results):
+    """Display scoring criteria analysis"""
+    st.markdown("---")
+    st.subheader("🎯 Investment Score Analysis")
+    
+    for criterion in criteria_results:
+        st.markdown(f"**{criterion}**")
+
+def display_recommendation_section(score, max_score):
+    """Display final recommendation"""
+    st.markdown("---")
+    
+    recommendation, description, msg_type = get_recommendation(score, max_score)
+    score_percentage = (score / max_score) * 100
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.metric("Investment Score", f"{score:.1f} / {max_score}", delta=f"{score_percentage:.0f}%")
+    
+    with col2:
+        if msg_type == "success":
+            st.success(f"🟢 **Recommendation: {recommendation}**")
+        elif msg_type == "warning":
+            st.warning(f"🟡 **Recommendation: {recommendation}**")
+        else:
+            st.error(f"🔴 **Recommendation: {recommendation}**")
+        
+        st.write(description)
+
+def display_charts(hist, ticker):
+    """Display price charts"""
+    st.markdown("---")
+    st.subheader("📈 Price Charts")
+    
+    # Create tabs for different chart types
+    tab1, tab2 = st.tabs(["📊 Line Chart", "🕯️ Candlestick Chart"])
+    
+    with tab1:
+        line_chart = create_price_line_chart(hist, ticker)
+        if line_chart:
+            st.plotly_chart(line_chart, use_container_width=True)
+        else:
+            st.warning("No historical data available for line chart")
+    
+    with tab2:
+        candle_chart = create_candlestick_chart(hist, ticker)
+        if candle_chart:
+            st.plotly_chart(candle_chart, use_container_width=True)
+        else:
+            st.warning("No historical data available for candlestick chart")
+
+def display_disclaimer():
+    """Display disclaimer"""
+    st.markdown("---")
+    st.info("⚠️ **Disclaimer:** This analysis is for educational purposes only. Always conduct thorough research and consult with a financial advisor before making investment decisions.")
+
+def create_price_line_chart(hist, ticker):
+    """Create interactive line chart for price history"""
+    if hist.empty:
         return None
-    residuals = train_data["Price"].values - predictions.values
-    return pd.Series(residuals, index=train_data.index)
-
-def create_acf_pacf_plots(residuals):
-    """Create proper ACF and PACF plots with confidence intervals"""
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=('ACF (Autocorrelation)', 'PACF (Partial Autocorrelation)')
-    )
     
-    nlags = min(40, len(residuals) // 2)
-    
-    try:
-        # Calculate ACF with confidence intervals
-        acf_values = acf(residuals, nlags=nlags, alpha=0.05)
-        acf_vals = acf_values[0] if isinstance(acf_values, tuple) else acf_values
-        
-        # Calculate PACF with confidence intervals
-        pacf_values = pacf(residuals, nlags=nlags, alpha=0.05)
-        pacf_vals = pacf_values[0] if isinstance(pacf_values, tuple) else pacf_values
-        
-        # ACF plot
-        fig.add_trace(
-            go.Bar(x=list(range(len(acf_vals))), y=acf_vals, 
-                   name='ACF', marker_color='cyan'),
-            row=1, col=1
-        )
-        
-        # Confidence interval for ACF
-        conf_int = 1.96 / np.sqrt(len(residuals))
-        fig.add_hline(y=conf_int, line_dash="dash", line_color="red", 
-                      opacity=0.5, row=1, col=1)
-        fig.add_hline(y=-conf_int, line_dash="dash", line_color="red", 
-                      opacity=0.5, row=1, col=1)
-        
-        # PACF plot
-        fig.add_trace(
-            go.Bar(x=list(range(len(pacf_vals))), y=pacf_vals, 
-                   name='PACF', marker_color='orange'),
-            row=1, col=2
-        )
-        
-        # Confidence interval for PACF
-        fig.add_hline(y=conf_int, line_dash="dash", line_color="red", 
-                      opacity=0.5, row=1, col=2)
-        fig.add_hline(y=-conf_int, line_dash="dash", line_color="red", 
-                      opacity=0.5, row=1, col=2)
-        
-    except Exception as e:
-        st.warning(f"Error creating ACF/PACF plots: {str(e)}")
-    
-    fig.update_layout(height=400, showlegend=False, template='plotly_dark')
-    return fig
-
-# ==================== FORECASTING ====================
-def create_future_dataframe(data, forecast_days=365):
-    """Create future dates and features"""
-    last_date = pd.to_datetime(data["Date"].iloc[-1])
-    future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=forecast_days, freq='D')
-    
-    future_df = pd.DataFrame({'Date': future_dates})
-    future_df["t"] = np.arange(data.shape[0] + 1, data.shape[0] + forecast_days + 1)
-    future_df["t_square"] = future_df["t"] ** 2
-    future_df["Sin"] = np.sin((2 * np.pi * future_df["t"]) / 365.25)
-    future_df["Cos"] = np.cos((2 * np.pi * future_df["t"]) / 365.25)
-    
-    return future_df
-
-def forecast_with_autoreg(best_model, best_model_type, data, train_data, future_df, residuals):
-    """Forecast using AutoRegression - Proper method without data leakage"""
-    try:
-        pred_trend = get_model_prediction(best_model, best_model_type, future_df)
-        if pred_trend is None:
-            return future_df, None
-        
-        pred_trend = pd.Series(pred_trend.values)
-        
-        # Use ONLY training residuals (no data leakage)
-        model_ar = AutoReg(residuals, lags=[1])
-        model_fit = model_ar.fit()
-        
-        # Predict residuals for future
-        pred_res = model_fit.predict(
-            start=len(residuals),
-            end=len(residuals) + len(future_df) - 1,
-            dynamic=False
-        )
-        pred_res.reset_index(drop=True, inplace=True)
-        
-        final_pred = pred_trend + pred_res
-        future_df["AutoReg_Price"] = final_pred.values
-        
-        return future_df, model_fit
-    except Exception as e:
-        st.error(f"AutoReg forecasting failed: {str(e)}")
-        return future_df, None
-
-def forecast_with_arima(best_model, best_model_type, data, train_data, future_df, residuals, order=(1,1,1)):
-    """Forecast using ARIMA - Proper method without data leakage"""
-    try:
-        pred_trend = get_model_prediction(best_model, best_model_type, future_df)
-        if pred_trend is None:
-            return future_df, None
-        
-        pred_trend = pd.Series(pred_trend.values)
-        
-        # Use ONLY training residuals (no data leakage)
-        model = ARIMA(residuals, order=order)
-        results = model.fit()
-        
-        forecast = results.predict(
-            start=len(residuals),
-            end=len(residuals) + len(future_df) - 1,
-            typ='levels'
-        )
-        forecast = pd.Series(forecast.values)
-        forecast.reset_index(drop=True, inplace=True)
-        
-        final_pred = pred_trend + forecast
-        future_df["ARIMA_Price"] = final_pred.values
-        
-        return future_df, results
-    except Exception as e:
-        st.error(f"ARIMA forecasting failed: {str(e)}")
-        return future_df, None
-
-def forecast_with_sarimax(best_model, best_model_type, data, train_data, future_df, residuals, order=(1,1,1)):
-    """Forecast using SARIMAX - Proper method without data leakage"""
-    try:
-        pred_trend = get_model_prediction(best_model, best_model_type, future_df)
-        if pred_trend is None:
-            return future_df, None
-        
-        pred_trend = pd.Series(pred_trend.values)
-        
-        # Use ONLY training residuals (no data leakage)
-        model = SARIMAX(residuals, order=order)
-        results = model.fit(disp=False)
-        
-        forecast = results.predict(
-            start=len(residuals),
-            end=len(residuals) + len(future_df) - 1,
-            typ='levels'
-        )
-        forecast = pd.Series(forecast.values)
-        forecast.reset_index(drop=True, inplace=True)
-        
-        final_pred = pred_trend + forecast
-        future_df["SARIMAX_Price"] = final_pred.values
-        
-        return future_df, results
-    except Exception as e:
-        st.error(f"SARIMAX forecasting failed: {str(e)}")
-        return future_df, None
-
-def forecast_with_prophet(data, forecast_days=365):
-    """Forecast using Facebook Prophet"""
-    if not PROPHET_AVAILABLE:
-        st.error("Prophet not available. Please install: pip install prophet")
-        return None, None, None
-    
-    try:
-        # Prepare data for Prophet (requires 'ds' and 'y' columns)
-        prophet_df = data[['Date', 'Price']].copy()
-        prophet_df.columns = ['ds', 'y']
-        
-        # Initialize and fit model
-        model = Prophet(
-            daily_seasonality=True,
-            weekly_seasonality=True,
-            yearly_seasonality=True,
-            changepoint_prior_scale=0.05,
-            seasonality_mode='multiplicative'
-        )
-        
-        with st.spinner("Training Prophet model..."):
-            model.fit(prophet_df)
-        
-        # Create future dataframe
-        future = model.make_future_dataframe(periods=forecast_days, freq='D')
-        
-        # Make predictions
-        forecast = model.predict(future)
-        
-        # Extract only future predictions
-        future_forecast = forecast[len(data):][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
-        future_forecast.columns = ['Date', 'Prophet_Price', 'Prophet_Lower', 'Prophet_Upper']
-        future_forecast.reset_index(drop=True, inplace=True)
-        
-        return future_forecast, model, forecast
-    except Exception as e:
-        st.error(f"Prophet forecasting failed: {str(e)}")
-        return None, None, None
-
-# ==================== VISUALIZATION ====================
-def plot_candlestick(data, ticker):
-    """Create candlestick chart"""
-    fig = go.Figure(data=[go.Candlestick(
-        x=data['Date'],
-        open=data['Open'],
-        high=data['High'],
-        low=data['Low'],
-        close=data['Price'],
-        name='OHLC',
-        increasing_line_color='#00ff41',
-        decreasing_line_color='#ff0266'
-    )])
-    
-    fig.update_layout(
-        title=f'{ticker} - Candlestick Chart',
-        yaxis_title='Price',
-        xaxis_title='Date',
-        template='plotly_dark',
-        height=600,
-        xaxis_rangeslider_visible=False,
-        hovermode='x unified'
-    )
-    
-    return fig
-
-def plot_prophet_components(prophet_model, forecast):
-    """Plot Prophet model components (trend, seasonality)"""
-    if not PROPHET_AVAILABLE or prophet_model is None:
-        return None
-    
-    try:
-        from prophet.plot import plot_components_plotly
-        
-        fig = plot_components_plotly(prophet_model, forecast)
-        fig.update_layout(
-            template='plotly_dark',
-            height=800
-        )
-        
-        return fig
-    except Exception as e:
-        st.warning(f"Could not create Prophet components plot: {str(e)}")
-        return None
-
-def plot_price_trends(data, ticker):
-    """Plot historical price with trend"""
     fig = go.Figure()
     
+    # Add closing price line
     fig.add_trace(go.Scatter(
-        x=data['Date'],
-        y=data['Price'],
+        x=hist.index,
+        y=hist['Close'],
         mode='lines',
-        name='Historical Price',
-        line=dict(color='cyan', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(0, 255, 255, 0.1)'
+        name='Close Price',
+        line=dict(color='#2E86DE', width=2),
+        hovertemplate='<b>Date</b>: %{x}<br><b>Price</b>: ₹%{y:.2f}<extra></extra>'
     ))
     
+    # Add 50-day moving average
+    if len(hist) >= 50:
+        ma_50 = hist['Close'].rolling(window=50).mean()
+        fig.add_trace(go.Scatter(
+            x=hist.index,
+            y=ma_50,
+            mode='lines',
+            name='50-Day MA',
+            line=dict(color='#FFA502', width=1.5, dash='dash'),
+            hovertemplate='<b>50-Day MA</b>: ₹%{y:.2f}<extra></extra>'
+        ))
+    
+    # Add 200-day moving average
+    if len(hist) >= 200:
+        ma_200 = hist['Close'].rolling(window=200).mean()
+        fig.add_trace(go.Scatter(
+            x=hist.index,
+            y=ma_200,
+            mode='lines',
+            name='200-Day MA',
+            line=dict(color='#FF6348', width=1.5, dash='dot'),
+            hovertemplate='<b>200-Day MA</b>: ₹%{y:.2f}<extra></extra>'
+        ))
+    
     fig.update_layout(
-        title=f'{ticker} - Historical Price Trend',
-        yaxis_title='Price',
+        title=f'{ticker} - Price History (1 Year)',
         xaxis_title='Date',
-        template='plotly_dark',
-        height=500,
-        hovermode='x unified'
-    )
-    
-    return fig
-
-def plot_model_comparison(rmse_scores):
-    """Plot RMSE comparison of all models"""
-    models = list(rmse_scores.keys())
-    scores = list(rmse_scores.values())
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=models,
-            y=scores,
-            marker_color=['#00ff41' if s == min(scores) else '#ff0266' for s in scores],
-            text=[f'{s:.2f}' for s in scores],
-            textposition='auto',
-        )
-    ])
-    
-    fig.update_layout(
-        title='Model Performance Comparison (RMSE)',
-        xaxis_title='Model',
-        yaxis_title='RMSE',
-        template='plotly_dark',
-        height=400,
-        showlegend=False
-    )
-    
-    return fig
-
-def plot_forecast_comparison(data, forecast_df, ticker, prophet_forecast=None):
-    """Plot all forecasting methods comparison"""
-    fig = go.Figure()
-    
-    # Historical data
-    fig.add_trace(go.Scatter(
-        x=data['Date'],
-        y=data['Price'],
-        mode='lines',
-        name='Historical Price',
-        line=dict(color='cyan', width=2)
-    ))
-    
-    # AutoReg forecast
-    if 'AutoReg_Price' in forecast_df.columns:
-        fig.add_trace(go.Scatter(
-            x=forecast_df['Date'],
-            y=forecast_df['AutoReg_Price'],
-            mode='lines',
-            name='AutoReg Forecast',
-            line=dict(color='orange', width=2, dash='dash')
-        ))
-    
-    # ARIMA forecast
-    if 'ARIMA_Price' in forecast_df.columns:
-        fig.add_trace(go.Scatter(
-            x=forecast_df['Date'],
-            y=forecast_df['ARIMA_Price'],
-            mode='lines',
-            name='ARIMA Forecast',
-            line=dict(color='magenta', width=2, dash='dot')
-        ))
-    
-    # SARIMAX forecast
-    if 'SARIMAX_Price' in forecast_df.columns:
-        fig.add_trace(go.Scatter(
-            x=forecast_df['Date'],
-            y=forecast_df['SARIMAX_Price'],
-            mode='lines',
-            name='SARIMAX Forecast',
-            line=dict(color='yellow', width=2, dash='dashdot')
-        ))
-    
-    # Prophet forecast
-    if prophet_forecast is not None and 'Prophet_Price' in prophet_forecast.columns:
-        # Confidence interval
-        fig.add_trace(go.Scatter(
-            x=prophet_forecast['Date'],
-            y=prophet_forecast['Prophet_Upper'],
-            mode='lines',
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo='skip'
-        ))
-        fig.add_trace(go.Scatter(
-            x=prophet_forecast['Date'],
-            y=prophet_forecast['Prophet_Lower'],
-            mode='lines',
-            line=dict(width=0),
-            fillcolor='rgba(0, 255, 100, 0.2)',
-            fill='tonexty',
-            name='Prophet Confidence',
-            showlegend=True
-        ))
-        # Main forecast line
-        fig.add_trace(go.Scatter(
-            x=prophet_forecast['Date'],
-            y=prophet_forecast['Prophet_Price'],
-            mode='lines',
-            name='Prophet Forecast',
-            line=dict(color='lime', width=2.5)
-        ))
-    
-    fig.update_layout(
-        title=f'{ticker} - Forecast Comparison (Next {len(forecast_df)} Days)',
-        yaxis_title='Price',
-        xaxis_title='Date',
-        template='plotly_dark',
-        height=600,
+        yaxis_title='Price (₹)',
         hovermode='x unified',
+        height=500,
+        showlegend=True,
         legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        template='plotly_white'
     )
     
     return fig
 
-def plot_residuals_analysis(residuals, data):
-    """Plot residual analysis"""
+def create_candlestick_chart(hist, ticker):
+    """Create interactive candlestick chart with volume"""
+    if hist.empty:
+        return None
+    
+    # Create subplots: candlestick on top, volume on bottom
     fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=(
-            'Residuals Over Time',
-            'Residual Distribution',
-            'Q-Q Plot',
-            'Residuals vs Fitted'
-        ),
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.7, 0.3],
+        subplot_titles=(f'{ticker} - Candlestick Chart', 'Volume')
     )
     
-    # Residuals over time
+    # Add candlestick chart
     fig.add_trace(
-        go.Scatter(x=data['Date'], y=residuals, mode='lines',
-                   name='Residuals', line=dict(color='yellow', width=1)),
+        go.Candlestick(
+            x=hist.index,
+            open=hist['Open'],
+            high=hist['High'],
+            low=hist['Low'],
+            close=hist['Close'],
+            name='OHLC',
+            increasing_line_color='#26DE81',
+            decreasing_line_color='#FC5C65',
+            hovertext=[f'Open: ₹{o:.2f}<br>High: ₹{h:.2f}<br>Low: ₹{l:.2f}<br>Close: ₹{c:.2f}' 
+                      for o, h, l, c in zip(hist['Open'], hist['High'], hist['Low'], hist['Close'])]
+        ),
         row=1, col=1
     )
-    fig.add_hline(y=0, line_dash="dash", line_color="red", row=1, col=1)
     
-    # Histogram
-    fig.add_trace(
-        go.Histogram(x=residuals, name='Distribution',
-                     marker=dict(color='orange'), nbinsx=30),
-        row=1, col=2
-    )
-    
-    # Q-Q plot approximation
-    theoretical_quantiles = stats.norm.ppf(np.linspace(0.01, 0.99, len(residuals)))
-    sample_quantiles = np.sort(residuals)
+    # Add volume bars
+    colors = ['#26DE81' if hist['Close'].iloc[i] >= hist['Open'].iloc[i] 
+              else '#FC5C65' for i in range(len(hist))]
     
     fig.add_trace(
-        go.Scatter(x=theoretical_quantiles, y=sample_quantiles,
-                   mode='markers', name='Q-Q',
-                   marker=dict(color='cyan', size=4)),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=theoretical_quantiles, y=theoretical_quantiles,
-                   mode='lines', name='Reference',
-                   line=dict(color='red', dash='dash')),
+        go.Bar(
+            x=hist.index,
+            y=hist['Volume'],
+            name='Volume',
+            marker_color=colors,
+            showlegend=False,
+            hovertemplate='<b>Volume</b>: %{y:,.0f}<extra></extra>'
+        ),
         row=2, col=1
     )
     
-    # Residuals vs Fitted
-    fitted = data['Price'].values[:len(residuals)] - residuals.values
-    fig.add_trace(
-        go.Scatter(x=fitted, y=residuals, mode='markers',
-                   name='Residuals vs Fitted',
-                   marker=dict(color='magenta', size=4)),
-        row=2, col=2
-    )
-    fig.add_hline(y=0, line_dash="dash", line_color="red", row=2, col=2)
-    
+    # Update layout
     fig.update_layout(
-        height=800,
-        template='plotly_dark',
-        showlegend=False
+        height=700,
+        hovermode='x unified',
+        showlegend=True,
+        xaxis_rangeslider_visible=False,
+        template='plotly_white'
     )
+    
+    fig.update_xaxes(title_text="Date", row=2, col=1)
+    fig.update_yaxes(title_text="Price (₹)", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
     
     return fig
+    """Display disclaimer"""
+    st.markdown("---")
+    st.info("⚠️ **Disclaimer:** This analysis is for educational purposes only. Always conduct thorough research and consult with a financial advisor before making investment decisions.")
 
-# ==================== DATA EXPORT ====================
-def convert_to_csv(df):
-    """Convert dataframe to CSV"""
-    return df.to_csv(index=False).encode('utf-8')
-
-def create_excel_download(data, forecast_df, rmse_scores):
-    """Create Excel file with multiple sheets"""
-    output = io.BytesIO()
-    try:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            data.to_excel(writer, sheet_name='Historical_Data', index=False)
-            forecast_df.to_excel(writer, sheet_name='Forecast_Data', index=False)
-            
-            rmse_df = pd.DataFrame({
-                'Model': list(rmse_scores.keys()),
-                'RMSE': list(rmse_scores.values())
-            })
-            rmse_df.to_excel(writer, sheet_name='Model_Performance', index=False)
+def display_sidebar():
+    """Display sidebar with instructions"""
+    with st.sidebar:
+        st.header("📖 How to Use")
+        st.markdown("""
+        1. Enter NSE ticker (e.g., **RELIANCE.NS**)
+        2. Adjust industry P/E if needed
+        3. Click **Analyze Stock**
+        4. Review the investment score
         
-        return output.getvalue()
-    except Exception as e:
-        st.error(f"Error creating Excel file: {str(e)}")
-        return None
+        **Popular NSE Tickers:**
+        - RELIANCE.NS
+        - TCS.NS
+        - INFY.NS
+        - HDFCBANK.NS
+        - WIPRO.NS
+        - TATAMOTORS.NS
+        - ITC.NS
+        - SBIN.NS
+        """)
+        
+        st.markdown("---")
+        st.markdown("**Scoring Criteria:**")
+        st.markdown("""
+        - Near 52W low: 1.0
+        - P/E < Industry: 1.0
+        - P/B ≤ 3: 1.0
+        - Div Yield ≥ 2%: 0.5
+        - ROE ≥ 10%: 1.0
+        - D/E ≤ 0.5: 1.0
+        - Large cap: 1.0
+        - Above 50-MA: 0.5
+        
+        **Max Score: 7.5**
+        """)
 
-# ==================== MAIN APP ====================
+# ==================== MAIN APPLICATION ====================
+
 def main():
-    st.set_page_config(
-        page_title="Stock Forecast Pro",
-        page_icon="📈",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+    """Main application function"""
+    display_header()
+    display_sidebar()
     
-    # Custom CSS
-    st.markdown("""
-        <style>
-        .main-header {
-            font-size: 3rem;
-            font-weight: bold;
-            background: linear-gradient(90deg, #00ff41, #00b8ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-align: center;
-            padding: 1rem 0;
-        }
-        .metric-card {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            padding: 1rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # Input section
+    col1, col2, col3 = st.columns([2, 1, 1])
     
-    st.markdown('<h1 class="main-header">📈 Advanced Stock Forecasting Platform</h1>', unsafe_allow_html=True)
-    st.markdown("**Professional Time Series Analysis with Multiple Forecasting Models**")
+    with col1:
+        ticker_input = st.text_input(
+            "Enter NSE Ticker Symbol",
+            placeholder="e.g., WIPRO.NS, TCS.NS, RELIANCE.NS",
+            help="Add .NS suffix for NSE stocks"
+        ).upper()
     
-    # Sidebar
-    if os.path.exists("sl_022321_41020_26.jpg"):
-        st.sidebar.image("sl_022321_41020_26.jpg", width=100)
-    else:
-        st.sidebar.markdown("# 📈")
+    with col2:
+        industry_pe_input = st.number_input(
+            "Industry P/E", 
+            value=25.0, 
+            min_value=0.0, 
+            step=0.5,
+            help="Will auto-update if available from yfinance"
+        )
     
-    st.sidebar.title("⚙️ Configuration")
+    with col3:
+        analyze_btn = st.button("🔍 Analyze Stock", type="primary", use_container_width=True)
     
-    # Popular tickers
-    popular_tickers = {
-        "Gold ETF (India)": "SETFGOLD.NS",
-        "Apple": "AAPL",
-        "Microsoft": "MSFT",
-        "Google": "GOOGL",
-        "Tesla": "TSLA",
-        "Amazon": "AMZN",
-        "Reliance (India)": "RELIANCE.NS",
-        "TCS (India)": "TCS.NS",
-        "Custom": "CUSTOM"
-    }
-    
-    selected_ticker = st.sidebar.selectbox(
-        "Select Ticker",
-        list(popular_tickers.keys()),
-        index=0
-    )
-    
-    if popular_tickers[selected_ticker] == "CUSTOM":
-        ticker = st.sidebar.text_input("Enter Custom Ticker:", "AAPL")
-    else:
-        ticker = popular_tickers[selected_ticker]
-    
-    col1, col2 = st.sidebar.columns(2)
-    start_date = col1.date_input("Start Date", pd.to_datetime("2024-01-01"))
-    end_date = col2.date_input("End Date", pd.to_datetime("today"))
-    
-    # Validate dates
-    is_valid, message = validate_dates(start_date, end_date)
-    if not is_valid:
-        st.sidebar.error(message)
-    
-    forecast_days = st.sidebar.slider("Forecast Days", 30, 730, 365)
-    test_size = st.sidebar.slider("Test Split (%)", 10, 30, 20) / 100
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔧 ARIMA Configuration")
-    arima_p = st.sidebar.selectbox("AR Order (p)", [0, 1, 2, 3], index=1)
-    arima_d = st.sidebar.selectbox("Differencing (d)", [0, 1, 2], index=1)
-    arima_q = st.sidebar.selectbox("MA Order (q)", [0, 1, 2, 3], index=1)
-    arima_order = (arima_p, arima_d, arima_q)
-    
-    available_methods = ["AutoReg", "ARIMA", "SARIMAX"]
-    if PROPHET_AVAILABLE:
-        available_methods.append("Prophet")
-    else:
-        st.sidebar.warning("⚠️ Prophet not installed")
-    
-    forecast_methods = st.sidebar.multiselect(
-        "Select Forecast Methods",
-        available_methods,
-        default=["SARIMAX", "Prophet"] if PROPHET_AVAILABLE else ["SARIMAX"]
-    )
-    
-    # Check if Prophet is selected but not available
-    if "Prophet" in forecast_methods and not PROPHET_AVAILABLE:
-        st.sidebar.error("Prophet is selected but not installed. Please install: pip install prophet")
-        forecast_methods = [m for m in forecast_methods if m != "Prophet"]
-    
-    if st.sidebar.button("🚀 Run Forecast", type="primary", use_container_width=True):
-        
-        if not is_valid:
-            st.error(message)
-            return
-        
-        # Fetch data
-        with st.spinner(f"📡 Fetching data for {ticker}..."):
-            raw_data = load_stock_data(ticker, start_date, end_date)
-        
-        if raw_data is None or raw_data.empty:
-            st.error("❌ No data available. Please check the ticker symbol.")
-            return
-        
-        # Prepare data
-        with st.spinner("⚙️ Preparing data..."):
-            data = prepare_data(raw_data)
-        
-        st.success(f"✅ Successfully loaded {len(data)} days of data")
-        
-        # Validate forecast horizon
-        is_valid_horizon, warning_message = validate_forecast_horizon(len(data), forecast_days)
-        if warning_message:
-            st.warning(warning_message)
-        
-        # Get currency symbol
-        currency = get_currency_symbol(ticker)
-        
-        # Create tabs
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📊 Overview",
-            "🕯️ Candlestick",
-            "📈 Models",
-            "🔮 Forecast",
-            "📉 Diagnostics",
-            "💾 Export"
-        ])
-        
-        # Tab 1: Overview
-        with tab1:
-            st.subheader(f"📊 Data Overview - {ticker}")
-            
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Latest Price", f"{currency}{data['Price'].iloc[-1]:.2f}")
-            col2.metric("Highest", f"{currency}{data['High'].max():.2f}")
-            col3.metric("Lowest", f"{currency}{data['Low'].min():.2f}")
-            col4.metric("Avg Volume", f"{data['Volume'].mean()/1e6:.2f}M")
-            col5.metric("Data Points", f"{len(data)}")
-            
-            st.plotly_chart(plot_price_trends(data, ticker), use_container_width=True)
-            
-            st.subheader("📋 Recent Data")
-            st.dataframe(
-                data[['Date', 'Open', 'High', 'Low', 'Price', 'Volume']].tail(10),
-                use_container_width=True
-            )
-        
-        # Tab 2: Candlestick
-        with tab2:
-            st.subheader("🕯️ Candlestick Analysis")
-            st.plotly_chart(plot_candlestick(data, ticker), use_container_width=True)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Price Range", f"{currency}{data['High'].max() - data['Low'].min():.2f}")
-            with col2:
-                avg_daily_change = ((data['Price'].iloc[-1] / data['Price'].iloc[0]) - 1) * 100
-                st.metric("Total Change", f"{avg_daily_change:.2f}%")
-        
-        # Tab 3: Models
-        with tab3:
-            st.subheader("🤖 Model Training & Evaluation")
-            
-            with st.spinner("Training models..."):
-                train_data, test_data = proper_time_series_split(data, test_size)
+    # Process analysis
+    if ticker_input and analyze_btn:
+        with st.spinner(f"Fetching data for {ticker_input}..."):
+            try:
+                # Fetch data
+                stock, info, hist = fetch_stock_data(ticker_input)
                 
-                result = train_all_models(train_data, test_data)
-                
-                if result[0] is None:
-                    st.error("Model training failed. Please check your data.")
+                # Validate data
+                if not info or info.get('regularMarketPrice') is None:
+                    st.error(f"❌ Could not fetch data for {ticker_input}. Please verify the ticker symbol.")
                     return
                 
-                best_model, rmse_scores, best_model_name, all_models, best_model_type = result
-            
-            st.success(f"🏆 Best Model: **{best_model_name}** (RMSE: {rmse_scores[best_model_name]:.2f})")
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.plotly_chart(plot_model_comparison(rmse_scores), use_container_width=True)
-            
-            with col2:
-                st.subheader("📊 Model Scores")
-                rmse_df = pd.DataFrame({
-                    'Model': list(rmse_scores.keys()),
-                    'RMSE': [f"{v:.2f}" for v in rmse_scores.values()]
-                })
-                st.dataframe(rmse_df, use_container_width=True, hide_index=True)
-        
-        # Tab 4: Forecast
-        with tab4:
-            st.subheader(f"🔮 Price Forecast - Next {forecast_days} Days")
-            
-            with st.spinner("Generating forecasts..."):
-                # CRITICAL FIX: Re-train the best model on FULL data for production forecast
-                # This eliminates the gap while maintaining proper evaluation
+                # Extract fundamentals
+                fundamentals = extract_stock_fundamentals(info)
                 
-                st.info("ℹ️ Re-training best model on complete historical data for seamless forecasting...")
+                # Update industry PE if available from yfinance
+                if fundamentals.get('industry_pe'):
+                    industry_pe_input = float(fundamentals['industry_pe'])
+                    st.info(f"ℹ️ Industry P/E auto-updated to {industry_pe_input:.2f} from yfinance data")
                 
-                # Find which model type was best
-                model_mapping = {
-                    'rmse_linear': 'linear',
-                    'rmse_Exp': 'exp',
-                    'rmse_Quad': 'quad',
-                    'rmse_add_sea': 'add_sea',
-                    'rmse_Mult_sea': 'mul_sea',
-                    'rmse_add_sea_quad': 'add_sea_quad',
-                    'rmse_Mult_add_sea': 'mul_add_sea'
-                }
-                
-                production_model_type = model_mapping[best_model_name]
-                
-                # Re-train on FULL data for production forecasting
-                if production_model_type == 'linear':
-                    production_model = smf.ols("Price ~ t", data=data).fit()
-                elif production_model_type == 'exp':
-                    production_model = smf.ols("log_Price ~ t", data=data).fit()
-                elif production_model_type == 'quad':
-                    production_model = smf.ols("Price ~ t + t_square", data=data).fit()
-                elif production_model_type == 'add_sea':
-                    production_model = smf.ols('Price ~ Sin + Cos', data=data).fit()
-                elif production_model_type == 'mul_sea':
-                    production_model = smf.ols('log_Price ~ Sin + Cos', data=data).fit()
-                elif production_model_type == 'add_sea_quad':
-                    production_model = smf.ols('Price ~ t + t_square + Sin + Cos', data=data).fit()
-                elif production_model_type == 'mul_add_sea':
-                    production_model = smf.ols('log_Price ~ t + Sin + Cos', data=data).fit()
-                else:
-                    production_model = best_model  # Fallback
-                
-                # Calculate residuals from FULL data (for production forecast)
-                production_residuals = calculate_residuals(data, production_model, production_model_type)
-                
-                if production_residuals is None:
-                    st.error("Error calculating production residuals")
-                    return
-                
-                # Create future dataframe
-                future_df = create_future_dataframe(data, forecast_days)
-                
-                # Initialize variables
-                prophet_forecast = None
-                prophet_model = None
-                full_prophet_forecast = None
-                
-                # Run selected forecast methods with PRODUCTION model
-                if "AutoReg" in forecast_methods:
-                    future_df, ar_model = forecast_with_autoreg(
-                        production_model, production_model_type, data, data, future_df, production_residuals
-                    )
-                
-                if "ARIMA" in forecast_methods:
-                    future_df, arima_model = forecast_with_arima(
-                        production_model, production_model_type, data, data, future_df, production_residuals, arima_order
-                    )
-                
-                if "SARIMAX" in forecast_methods:
-                    future_df, sarimax_model = forecast_with_sarimax(
-                        production_model, production_model_type, data, data, future_df, production_residuals, arima_order
-                    )
-                
-                if "Prophet" in forecast_methods and PROPHET_AVAILABLE:
-                    prophet_forecast, prophet_model, full_prophet_forecast = forecast_with_prophet(
-                        data, forecast_days
-                    )
-                    if prophet_forecast is not None:
-                        # Merge Prophet results with other forecasts
-                        future_df = future_df.merge(
-                            prophet_forecast,
-                            on='Date',
-                            how='left'
-                        )
-            
-            st.plotly_chart(
-                plot_forecast_comparison(data, future_df, ticker, prophet_forecast),
-                use_container_width=True
-            )
-            
-            # # Explanation box
-            # with st.expander("📖 Why is the forecast seamless now?", expanded=False):
-            #     st.markdown("""
-            #     ### Understanding the Two-Phase Approach:
-                
-            #     **Phase 1: Model Evaluation (Tab 3)**
-            #     - Split data into train (80%) and test (20%)
-            #     - Train multiple models and compare performance
-            #     - Select best model based on RMSE
-            #     - ✅ This ensures **unbiased model selection**
-                
-            #     **Phase 2: Production Forecasting (This Tab)**
-            #     - Re-train the winning model on **100% of historical data**
-            #     - Use all available information for best predictions
-            #     - ✅ This creates **seamless transition** without data leakage
-                
-            #     ### Why This is Correct:
-            #     - **Evaluation phase**: Honest assessment using train/test split
-            #     - **Forecast phase**: Maximum information utilization
-            #     - **No data leakage**: We never peek at future data during model selection
-                
-            #     Think of it like this:
-            #     1. 🎓 **Learn** which algorithm works best (train/test)
-            #     2. 🚀 **Deploy** that algorithm using all available data (production)
-            #     """)
-            
-            
-            # Prophet components
-            if "Prophet" in forecast_methods and prophet_model is not None:
-                with st.expander("📊 Prophet Model Components (Trend & Seasonality)", expanded=False):
-                    components_fig = plot_prophet_components(prophet_model, full_prophet_forecast)
-                    if components_fig:
-                        st.plotly_chart(components_fig, use_container_width=True)
-            
-            # Forecast statistics
-            st.subheader("📊 Forecast Summary")
-            
-            # Filter methods that actually have predictions
-            valid_methods = []
-            for method in forecast_methods:
-                col_name = f"{method}_Price"
-                if col_name in future_df.columns and not future_df[col_name].isna().all():
-                    valid_methods.append(method)
-            
-            if valid_methods:
-                cols = st.columns(len(valid_methods))
-                
-                for idx, method in enumerate(valid_methods):
-                    col_name = f"{method}_Price"
-                    with cols[idx]:
-                        current_price = data['Price'].iloc[-1]
-                        forecast_price = future_df[col_name].iloc[-1]
-                        change_pct = ((forecast_price / current_price) - 1) * 100
-                        
-                        st.metric(
-                            f"{method} Prediction",
-                            f"{currency}{forecast_price:.2f}",
-                            f"{change_pct:+.2f}%"
-                        )
-            
-            st.subheader("📅 Forecast Data Preview")
-            display_cols = ['Date'] + [col for col in future_df.columns if 'Price' in col or 'Lower' in col or 'Upper' in col]
-            st.dataframe(future_df[display_cols].tail(10), use_container_width=True)
-        
-        # Tab 5: Diagnostics
-        with tab5:
-            st.subheader("🔍 Model Diagnostics")
-            
-            residuals = calculate_residuals(train_data, best_model, best_model_type)
-            
-            if residuals is not None:
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Mean Residual", f"{residuals.mean():.4f}")
-                col2.metric("Std Dev", f"{residuals.std():.4f}")
-                col3.metric("Max Abs Error", f"{abs(residuals).max():.2f}")
-                
-                st.plotly_chart(plot_residuals_analysis(residuals, train_data), use_container_width=True)
-                
-                # ACF/PACF plot
-                st.subheader("Autocorrelation Analysis")
-                acf_pacf_fig = create_acf_pacf_plots(residuals)
-                st.plotly_chart(acf_pacf_fig, use_container_width=True)
-            else:
-                st.error("Could not calculate residuals for diagnostics")
-        
-        # Tab 6: Export
-        with tab6:
-            st.subheader("💾 Download Data & Reports")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown("#### 📊 Historical Data")
-                historical_csv = convert_to_csv(data)
-                st.download_button(
-                    label="📥 Download CSV",
-                    data=historical_csv,
-                    file_name=f"{ticker}_historical_{start_date}_{end_date}.csv",
-                    mime="text/csv",
-                    use_container_width=True
+                # Calculate distances from 52-week high/low
+                pct_from_low, pct_from_high = calculate_distance_from_52w(
+                    fundamentals['current_price'],
+                    fundamentals['week_52_low'],
+                    fundamentals['week_52_high']
                 )
-            
-            with col2:
-                st.markdown("#### 🔮 Forecast Data")
-                forecast_csv = convert_to_csv(future_df)
-                st.download_button(
-                    label="📥 Download CSV",
-                    data=forecast_csv,
-                    file_name=f"{ticker}_forecast_{forecast_days}days.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            with col3:
-                st.markdown("#### 📈 Complete Report")
-                excel_data = create_excel_download(data, future_df, rmse_scores)
-                if excel_data:
-                    st.download_button(
-                        label="📥 Download Excel",
-                        data=excel_data,
-                        file_name=f"{ticker}_complete_analysis.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-            
-            st.markdown("---")
-            
-            # Combined dataset
-            st.subheader("📦 Combined Dataset")
-            
-            # Build combined dataframe carefully
-            historical_subset = data[['Date', 'Price']].copy()
-            historical_subset['Type'] = 'Historical'
-            
-            forecast_price_cols = [col for col in future_df.columns if 'Price' in col and col != 'Price']
-            if forecast_price_cols:
-                forecast_subset = future_df[['Date'] + forecast_price_cols].copy()
-                forecast_subset['Type'] = 'Forecast'
                 
-                combined_df = pd.concat([historical_subset, forecast_subset], ignore_index=True)
-            else:
-                combined_df = historical_subset
-            
-            st.dataframe(combined_df.head(10), use_container_width=True)
-            
-            combined_csv = convert_to_csv(combined_df)
-            st.download_button(
-                label="📥 Download Combined Dataset (CSV)",
-                data=combined_csv,
-                file_name=f"{ticker}_combined_dataset.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-            
-            # Model summary
-            st.markdown("---")
-            st.subheader("📄 Analysis Summary")
-            
-            summary_text = f"""
-### Stock Analysis Report - {ticker}
+                # Display results
+                display_company_info(ticker_input, fundamentals)
+                display_price_analysis(fundamentals, pct_from_low, pct_from_high)
+                
+                # Display charts
+                display_charts(hist, ticker_input)
+                
+                display_fundamentals(fundamentals, industry_pe_input)
+                
+                # Calculate score
+                max_score = 7.5
+                score, criteria_results = calculate_investment_score(fundamentals, industry_pe_input, hist)
+                
+                # Display analysis
+                display_scoring_analysis(criteria_results)
+                display_recommendation_section(score, max_score)
+                display_disclaimer()
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                st.write("Please verify the ticker symbol and try again.")
 
-**Analysis Period:** {start_date} to {end_date}  
-**Total Days Analyzed:** {len(data)}  
-**Forecast Horizon:** {forecast_days} days  
-
-#### Best Performing Model
-- **Model:** {best_model_name}  
-- **RMSE:** {rmse_scores[best_model_name]:.2f}  
-- **Test Split:** {test_size * 100:.0f}%  
-
-#### Current Metrics
-- **Latest Price:** {currency}{data['Price'].iloc[-1]:.2f}  
-- **Period High:** {currency}{data['High'].max():.2f}  
-- **Period Low:** {currency}{data['Low'].min():.2f}  
-- **Average Volume:** {data['Volume'].mean():,.0f}  
-
-#### Forecast Summary
-"""
-            
-            for method in forecast_methods:
-                col_name = f"{method}_Price"
-                if col_name in future_df.columns and not future_df[col_name].isna().all():
-                    forecast_price = future_df[col_name].iloc[-1]
-                    change_pct = ((forecast_price / data['Price'].iloc[-1]) - 1) * 100
-                    summary_text += f"- **{method}:** {currency}{forecast_price:.2f} ({change_pct:+.2f}%)\n"
-            
-            st.markdown(summary_text)
-            
-            st.download_button(
-                label="📥 Download Summary Report (TXT)",
-                data=summary_text,
-                file_name=f"{ticker}_analysis_summary.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
-    
-    # Sidebar info
-    st.sidebar.markdown("---")
-    st.sidebar.info("""
-    **📚 How to Use:**
-    1. Select a stock ticker
-    2. Choose date range
-    3. Configure forecast parameters
-    4. Click 'Run Forecast'
-    5. Explore tabs for insights
-    6. Download reports
-    
-    **🔧 Forecast Methods:**
-    - **AutoReg:** Auto-Regression model
-    - **ARIMA:** Integrated Moving Average
-    - **SARIMAX:** Seasonal ARIMA with exogenous variables
-    - **Prophet:** Facebook's time series forecasting (with trend & seasonality decomposition)
-    """)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Built with ❤️ using Streamlit | Data: Yahoo Finance")
-
+# Run the application
 if __name__ == "__main__":
     main()
