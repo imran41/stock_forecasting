@@ -56,7 +56,7 @@ def calculate_distance_from_52w(current_price, week_52_low, week_52_high):
 
 def fetch_stock_data(ticker):
     """Fetch stock data from yfinance"""
-    stock = yf.Ticker(ticker)
+    stock = yf.download(ticker)
     info = stock.info
     hist = stock.history(period="1y")
     return stock, info, hist
