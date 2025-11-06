@@ -547,8 +547,8 @@ def render_sidebar():
         threshold = st.slider(
             "Distance Threshold (%):",
             min_value=2,
-            max_value=10,
-            value=5,
+            max_value=20,
+            value=10,
             help="Max distance from 52W high/low"
         )
         
